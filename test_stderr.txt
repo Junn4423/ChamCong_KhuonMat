@@ -1,0 +1,14 @@
+onnxruntime\capi\onnxruntime_inference_collection.py:65: UserWarning: Specified provider 'OpenVINOExecutionProvider' is not in available provider names.Available providers: 'DmlExecutionProvider, CPUExecutionProvider'
+WARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.
+ * Running on http://127.0.0.1:5060
+Press CTRL+C to quit
+127.0.0.1 - - [27/Mar/2026 11:21:24] "GET /api/health HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 11:21:24] "GET / HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 11:21:53] "POST /api/admin_login HTTP/1.1" 401 -
+127.0.0.1 - - [27/Mar/2026 11:24:46] "POST /api/admin_login HTTP/1.1" 401 -
+127.0.0.1 - - [27/Mar/2026 11:25:17] "POST /api/admin_login HTTP/1.1" 401 -
+127.0.0.1 - - [27/Mar/2026 11:26:40] "POST /api/admin_login HTTP/1.1" 400 -
+127.0.0.1 - - [27/Mar/2026 11:31:18] "POST /api/admin_login HTTP/1.1" 400 -
+127.0.0.1 - - [27/Mar/2026 11:32:10] "POST /api/admin_login HTTP/1.1" 401 -
+127.0.0.1 - - [27/Mar/2026 11:34:28] "POST /api/admin_login HTTP/1.1" 401 -
+127.0.0.1 - - [27/Mar/2026 11:35:08] "POST /api/admin_login HTTP/1.1" 401 -

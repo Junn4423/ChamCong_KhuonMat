@@ -1,0 +1,40 @@
+# Dependencies
+node_modules/
+venv_build/
+__pycache__/
+
+# Build outputs
+dist/
+release/
+python-dist/
+build/
+*.spec.bak
+
+# IDE
+.vscode/
+.idea/
+
+# Env
+.env
+
+# Logs
+*.log
+logs/
+
+# Database
+instance/
+*.db
+
+# Cache
+openvino_cache/
+.cache/
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Old files (to be deleted)
+build_temp/
+build_runfix/
+dist_build/
+dist_runfix/

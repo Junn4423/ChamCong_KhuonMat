@@ -1,0 +1,14 @@
+flask
+flask-sqlalchemy
+flask-cors
+opencv-python-headless
+numpy
+Pillow
+python-dateutil
+mysql-connector-python
+torch
+torchvision
+easydict
+insightface
+onnxruntime
+python-dotenv
