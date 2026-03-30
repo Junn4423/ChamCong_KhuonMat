@@ -6,7 +6,7 @@ Ghi dữ liệu chấm công vào bảng tc_lv0012
 
 import mysql.connector
 from datetime import datetime, date
-from config_import import ERP_MAIN_CONFIG, ATTENDANCE_TABLE, ATTENDANCE_COLUMNS, CAMERA_CONFIG
+from backend.config import ERP_MAIN_CONFIG, ATTENDANCE_TABLE, ATTENDANCE_COLUMNS, CAMERA_CONFIG
 import logging
 
 # Thiết lập logging

@@ -150,18 +150,27 @@ def create_app():
 
     def generate_frames():
         while True:
-            svc = attendance_service_ref[0]
-            if not svc:
-                time.sleep(1)
-                continue
-            frame = svc.get_processed_frame()
-            if frame is None:
+            try:
+                svc = attendance_service_ref[0]
+                if not svc:
+                    time.sleep(1)
+                    continue
+                frame = svc.get_processed_frame()
+                if frame is None:
+                    time.sleep(0.1)
+                    continue
+                ret, buffer = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
+                if not ret:
+                    time.sleep(0.1)
+                    continue
+                frame_bytes = buffer.tobytes()
+                yield (b'--frame\r\n'
+                       b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+            except GeneratorExit:
+                return
+            except Exception as e:
+                print(f"Frame generation error: {e}")
                 time.sleep(0.1)
-                continue
-            ret, buffer = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
-            frame_bytes = buffer.tobytes()
-            yield (b'--frame\r\n'
-                   b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
 
     # ======================== ROUTES ========================
 

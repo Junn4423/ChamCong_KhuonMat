@@ -159,27 +159,39 @@ class FaceRecognition:
         return face_locations, face_names, face_ids, face_encodings, min_distances
 
     def draw_faces_on_frame(self, frame, face_locations, face_names):
-        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        pil_image = Image.fromarray(rgb_frame)
-        draw = ImageDraw.Draw(pil_image)
+        if not face_locations:
+            return frame
 
         try:
-            font_path = os.path.join(os.path.dirname(__file__), '..', '..', 'static', 'fonts', 'DejaVuSans.ttf')
-            font = ImageFont.truetype(font_path, 40)
-        except IOError:
-            font = ImageFont.load_default()
+            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            pil_image = Image.fromarray(rgb_frame)
+            draw = ImageDraw.Draw(pil_image)
 
-        for (top, right, bottom, left), name in zip(face_locations, face_names):
-            color = (0, 255, 0) if name != "Unknown" else (0, 0, 255)
-            draw.rectangle(((left, top), (right, bottom)), outline=color, width=2)
+            try:
+                font_path = os.path.join(os.path.dirname(__file__), '..', '..', 'static', 'fonts', 'DejaVuSans.ttf')
+                font = ImageFont.truetype(font_path, 40)
+            except (IOError, OSError):
+                font = ImageFont.load_default()
 
-            text_bbox = draw.textbbox((left, bottom), name, font=font)
-            text_width = text_bbox[2] - text_bbox[0]
-            text_height = text_bbox[3] - text_bbox[1]
-            draw.rectangle(((left, bottom), (left + text_width + 4, bottom + text_height + 4)), fill=color)
-            draw.text((left + 6, bottom + 2), name, font=font, fill=(255, 255, 255))
+            for (top, right, bottom, left), name in zip(face_locations, face_names):
+                name = name or 'Unknown'
+                color = (0, 255, 0) if name != "Unknown" else (0, 0, 255)
+                draw.rectangle(((left, top), (right, bottom)), outline=color, width=2)
 
-        return cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
+                try:
+                    text_bbox = draw.textbbox((left, bottom), name, font=font)
+                    text_width = text_bbox[2] - text_bbox[0]
+                    text_height = text_bbox[3] - text_bbox[1]
+                except Exception:
+                    text_width = len(name) * 20
+                    text_height = 30
+                draw.rectangle(((left, bottom), (left + text_width + 4, bottom + text_height + 4)), fill=color)
+                draw.text((left + 6, bottom + 2), name, font=font, fill=(255, 255, 255))
+
+            return cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
+        except Exception as e:
+            print(f"draw_faces_on_frame error: {e}")
+            return frame
 
     @staticmethod
     def frame_to_base64(frame):

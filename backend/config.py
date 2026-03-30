@@ -13,7 +13,8 @@ ERP_MAIN_CONFIG = {
     'user': os.getenv('ERP_USER', 'faceuser'),
     'password': os.getenv('ERP_PASSWORD', 'THU@1982'),
     'database': os.getenv('ERP_DATABASE', 'erp_sofv4_0'),
-    'charset': 'utf8mb4'
+    'charset': 'utf8mb4',
+    'connection_timeout': 3,
 }
 
 # ERP Documents Database (employee images)
@@ -23,7 +24,8 @@ ERP_DOCS_CONFIG = {
     'user': os.getenv('ERP_DOCS_USER', 'faceuser'),
     'password': os.getenv('ERP_DOCS_PASSWORD', 'THU@1982'),
     'database': os.getenv('ERP_DOCS_DATABASE', 'erp_sof_documents_v4_0'),
-    'charset': 'utf8mb4'
+    'charset': 'utf8mb4',
+    'connection_timeout': 3,
 }
 
 # Table/Column mappings

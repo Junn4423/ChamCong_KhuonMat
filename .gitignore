@@ -1,40 +1,141 @@
-# Dependencies
-node_modules/
-venv_build/
+# ============================================================
+# Python
+# ============================================================
 __pycache__/
-
-# Build outputs
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info/
 dist/
+build/
+eggs/
+parts/
+var/
+sdist/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+.installed.cfg
+MANIFEST
+
+# Virtual environments
+venv/
+venv_build/
+.venv/
+env/
+ENV/
+
+# ============================================================
+# Node / Frontend
+# ============================================================
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.pnpm-store/
+.npm/
+
+# Vite / build outputs
+dist/
+dist-ssr/
+
+# ============================================================
+# Environment & Secrets
+# ============================================================
+.env
+.env.local
+.env.*.local
+.env.production
+!.env.example
+
+# ============================================================
+# Database & Instance
+# ============================================================
+instance/
+*.db
+*.sqlite
+*.sqlite3
+
+# ============================================================
+# Logs
+# ============================================================
+logs/
+*.log
+npm-debug.log*
+crash_log.txt
+test_stdout.txt
+test_stderr.txt
+pm2-*.log
+
+# ============================================================
+# AI Model Cache
+# ============================================================
+openvino_cache/
+.cache/
+*.onnx.cache/
+
+# ============================================================
+# Build / Release artifacts
+# ============================================================
 release/
+release5/
+release6/
 python-dist/
 build/
 *.spec.bak
+builder-debug.yml
+builder-effective-config.yaml
+*.blockmap
 
-# IDE
+# ============================================================
+# Static uploaded files (runtime data)
+# ============================================================
+static/faces/
+backups/
+
+# ============================================================
+# IDE & Editor
+# ============================================================
 .vscode/
 .idea/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+*.sublime-project
+*.sublime-workspace
 
-# Env
-.env
-
-# Logs
-*.log
-logs/
-
-# Database
-instance/
-*.db
-
-# Cache
-openvino_cache/
-.cache/
-
+# ============================================================
 # OS
+# ============================================================
 Thumbs.db
+Thumbs.db:encdata
+Desktop.ini
+$RECYCLE.BIN/
 .DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
 
-# Old files (to be deleted)
-build_temp/
-build_runfix/
-dist_build/
-dist_runfix/
+# ============================================================
+# Misc
+# ============================================================
+*.bak
+*.tmp
+*.temp
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+coverage/
+.coverage
+htmlcov/
+

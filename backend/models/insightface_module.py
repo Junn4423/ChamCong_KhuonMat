@@ -4,6 +4,7 @@ import insightface
 from insightface.app import FaceAnalysis
 import os
 import sys
+import threading
 
 from backend.config import INTEL_OPTIMIZATION, PERFORMANCE_CONFIG
 
@@ -46,12 +47,13 @@ def build_prediction_score(prediction, model_count):
 
 
 def get_default_anti_spoof_dirs(model_dir):
-    candidate_dirs = [model_dir]
+    candidate_dirs = [os.path.abspath(model_dir)]
     resource_dir = os.path.join(PROJECT_ROOT, 'Silent-Face-Anti-Spoofing', 'resources', 'anti_spoof_models')
     fallback_dir = os.path.join(PROJECT_ROOT, 'models')
     for path in (resource_dir, fallback_dir):
-        if path not in candidate_dirs:
-            candidate_dirs.append(path)
+        abs_path = os.path.abspath(path)
+        if abs_path not in candidate_dirs:
+            candidate_dirs.append(abs_path)
     return candidate_dirs
 
 
@@ -109,11 +111,12 @@ class OnnxAntiSpoofingWrapper:
 
 class TorchAntiSpoofingWrapper:
     def __init__(self, model_dir='Silent-Face-Anti-Spoofing/resources/anti_spoof_models', device_id=0):
-        import anti_spoof_predict
+        import torch
 
         self.cropper = CropImage()
-        self.anti_spoof = anti_spoof_predict.AntiSpoofPredict(device_id)
+        self.device = torch.device("cpu")
         self.model_paths = []
+        self._cached_models = {}  # Pre-loaded models to avoid reload on every predict
         seen_paths = set()
         for candidate_dir in get_default_anti_spoof_dirs(model_dir):
             if not os.path.isdir(candidate_dir):
@@ -130,9 +133,50 @@ class TorchAntiSpoofingWrapper:
         if not self.model_paths:
             raise FileNotFoundError('No PyTorch anti-spoof models found')
 
-    def is_real_face(self, frame, bbox):
-        prediction = np.zeros((1, 3), dtype=np.float32)
+        # Pre-load all models once at init instead of reloading on every predict
+        from model_lib.MiniFASNet import MiniFASNetV1, MiniFASNetV2, MiniFASNetV1SE, MiniFASNetV2SE
+        from utility import get_kernel
+        _MODEL_MAPPING = {
+            'MiniFASNetV1': MiniFASNetV1,
+            'MiniFASNetV2': MiniFASNetV2,
+            'MiniFASNetV1SE': MiniFASNetV1SE,
+            'MiniFASNetV2SE': MiniFASNetV2SE
+        }
         for model_path in self.model_paths:
+            try:
+                model_name = os.path.basename(model_path)
+                h_input, w_input, model_type, _ = parse_model_name(model_path)
+                kernel_size = get_kernel(h_input, w_input)
+                model = _MODEL_MAPPING[model_type](conv6_kernel=kernel_size).to(self.device)
+                state_dict = torch.load(model_path, map_location=self.device)
+                keys = iter(state_dict)
+                first_layer_name = next(keys)
+                if first_layer_name.find('module.') >= 0:
+                    from collections import OrderedDict
+                    new_state_dict = OrderedDict()
+                    for key, value in state_dict.items():
+                        new_state_dict[key[7:]] = value
+                    model.load_state_dict(new_state_dict)
+                else:
+                    model.load_state_dict(state_dict)
+                model.eval()
+                self._cached_models[model_path] = model
+                print(f'  Loaded anti-spoof model: {model_name}')
+            except Exception as e:
+                print(f'  Warning: failed to load anti-spoof model {model_path}: {e}')
+
+    def is_real_face(self, frame, bbox):
+        import torch
+        import torch.nn.functional as F
+        from data_io import transform as trans
+
+        prediction = np.zeros((1, 3), dtype=np.float32)
+        test_transform = trans.Compose([trans.ToTensor()])
+        model_count = 0
+        for model_path in self.model_paths:
+            model = self._cached_models.get(model_path)
+            if model is None:
+                continue
             h_input, w_input, _model_type, scale = parse_model_name(model_path)
             crop_params = {
                 'org_img': frame,
@@ -143,8 +187,18 @@ class TorchAntiSpoofingWrapper:
                 'crop': scale is not None,
             }
             img = self.cropper.crop(**crop_params)
-            prediction += self.anti_spoof.predict(img, model_path)
-        return build_prediction_score(prediction, len(self.model_paths))
+            if img is None or img.size == 0:
+                continue
+            img_tensor = test_transform(img)
+            img_tensor = img_tensor.unsqueeze(0).to(self.device)
+            with torch.no_grad():
+                result = model.forward(img_tensor)
+                result = F.softmax(result, dim=1).cpu().numpy()
+            prediction += result
+            model_count += 1
+        if model_count == 0:
+            return True, 1.0
+        return build_prediction_score(prediction, model_count)
 
 
 class AntiSpoofingWrapper:
@@ -188,9 +242,11 @@ class InsightFaceWrapper:
         print(f'  Detection size: {det_size}, Threshold: {det_thresh}')
 
         self.anti_spoofing = AntiSpoofingWrapper()
+        self._lock = threading.RLock()
 
     def detect_and_encode(self, frame):
-        faces = self.app.get(frame)
+        with self._lock:
+            faces = self.app.get(frame)
         results = []
         for face in faces:
             results.append({
@@ -201,7 +257,25 @@ class InsightFaceWrapper:
         return results
 
     def check_anti_spoofing(self, frame, bbox_xywh):
-        return self.anti_spoofing.is_real_face(frame, bbox_xywh)
+        # Validate bbox before passing to anti-spoofing
+        x, y, w, h = bbox_xywh[0], bbox_xywh[1], bbox_xywh[2], bbox_xywh[3]
+        if w <= 0 or h <= 0:
+            return True, 1.0
+        frame_h, frame_w = frame.shape[:2]
+        # Clamp to frame bounds
+        x = max(0, min(x, frame_w - 1))
+        y = max(0, min(y, frame_h - 1))
+        w = min(w, frame_w - x)
+        h = min(h, frame_h - y)
+        if w <= 10 or h <= 10:
+            return True, 1.0
+        safe_bbox = [int(x), int(y), int(w), int(h)]
+        try:
+            with self._lock:
+                return self.anti_spoofing.is_real_face(frame, safe_bbox)
+        except Exception as e:
+            print(f'Anti-spoofing error: {e}')
+            return True, 1.0
 
     def compute_sim(self, feat1, feat2):
         return np.dot(feat1, feat2) / (np.linalg.norm(feat1) * np.linalg.norm(feat2))

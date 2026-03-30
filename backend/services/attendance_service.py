@@ -2,12 +2,10 @@ import cv2
 import numpy as np
 import threading
 import time
-import multiprocessing
 import queue
 from datetime import datetime, date
 from backend.config import CAMERA_CONFIG, PERFORMANCE_CONFIG, MOTION_CONFIG
 from backend.services.tracking_service import SimpleTracker
-from backend.models.insightface_module import InsightFaceWrapper
 
 
 class MotionDetector:
@@ -30,13 +28,8 @@ class MotionDetector:
         return False
 
 
-def ai_worker(input_queue, result_queue, initial_known_faces, config_overrides=None):
+def ai_worker(input_queue, result_queue, initial_known_faces, engine, config_overrides=None):
     """Worker thread for AI detection, anti-spoofing, and recognition."""
-    det_size = None
-    if config_overrides and 'detection_width' in config_overrides:
-        det_size = (config_overrides['detection_width'], config_overrides['detection_width'])
-
-    engine = InsightFaceWrapper(det_thresh=0.5, det_size=det_size)
     tracker = SimpleTracker(max_lost=2, iou_threshold=0.25, smoothing=0.6)
 
     known_face_encodings = initial_known_faces.get('encodings', np.empty((0, 512)))
@@ -48,8 +41,6 @@ def ai_worker(input_queue, result_queue, initial_known_faces, config_overrides=N
             try:
                 task_item = input_queue.get(timeout=1)
             except (KeyboardInterrupt, queue.Empty):
-                if isinstance(task_item if 'task_item' in dir() else None, type(None)):
-                    continue
                 continue
 
             if task_item is None:
@@ -98,8 +89,12 @@ def ai_worker(input_queue, result_queue, initial_known_faces, config_overrides=N
 
                 if not track['checked']:
                     embedding = tracker.get_track_embedding(track_id)
-                    if embedding is not None and bbox[2] > 50:
-                        is_real, score = engine.check_anti_spoofing(frame, bbox)
+                    if embedding is not None and bbox[2] > 50 and bbox[3] > 50:
+                        try:
+                            is_real, score = engine.check_anti_spoofing(frame, bbox)
+                        except Exception as e:
+                            print(f"Anti-spoofing check failed: {e}")
+                            is_real, score = True, 1.0
                         if not is_real:
                             tracker.update_track_info(track_id, "Fake", True)
                         else:
@@ -242,9 +237,8 @@ class AttendanceService:
         self.last_motion_time = time.time()
         self.no_motion_delay = 2.0
 
-        self.mp_ctx = multiprocessing.get_context('spawn')
-        self.input_queue = self.mp_ctx.Queue(maxsize=2)
-        self.result_queue = self.mp_ctx.Queue()
+        self.input_queue = queue.Queue(maxsize=2)
+        self.result_queue = queue.Queue()
 
     def start(self, camera_type=None, device_index=None, rtsp_url=None):
         if self.is_running:
@@ -275,13 +269,10 @@ class AttendanceService:
             'names': self.face_recognizer.known_face_names,
             'ids': self.face_recognizer.known_face_ids
         }
-        config_overrides = {
-            'detection_width': PERFORMANCE_CONFIG.get('detection_width', 1280)
-        }
 
         self.ai_process = threading.Thread(
             target=ai_worker,
-            args=(self.input_queue, self.result_queue, initial_faces, config_overrides),
+            args=(self.input_queue, self.result_queue, initial_faces, self.face_recognizer.engine),
             daemon=True
         )
         self.ai_process.start()
@@ -335,112 +326,124 @@ class AttendanceService:
         frame_count = 0
 
         while self.is_running:
-            if not self.camera or not self.camera.is_opened():
-                time.sleep(1)
-                continue
-
-            frame = self.camera.get_frame()
-            if frame is None:
-                time.sleep(0.01)
-                continue
-
-            frame_count += 1
-
-            small_frame = cv2.resize(frame, (0, 0), fx=0.5, fy=0.5)
-            has_motion = self.motion_detector.detect(small_frame)
-
-            if has_motion:
-                self.last_motion_time = time.time()
-
-            is_device_camera = bool(self.camera and getattr(self.camera, 'camera_type', '') == 'device')
-            should_process_ai = is_device_camera or (time.time() - self.last_motion_time) < self.no_motion_delay
-
-            if should_process_ai:
-                if not self.input_queue.full():
-                    self.input_queue.put((frame_count, frame))
-            else:
-                self.latest_results = []
-                self.display_tracks.clear()
+            loop_start = time.time()
 
             try:
-                while not self.result_queue.empty():
-                    results = self.result_queue.get_nowait()
-                    self.latest_results = results
-                    self.last_ai_update_time = time.time()
-
-                    active_ids = set()
-                    for res in results:
-                        if res.get('type') == 'display':
-                            tid = res['track_id']
-                            lost = res.get('lost', 0)
-                            if lost <= 1:
-                                active_ids.add(tid)
-                                if tid in self.display_tracks:
-                                    self.display_tracks[tid]['target_bbox'] = list(res['bbox'])
-                                    self.display_tracks[tid]['name'] = res['name']
-                                    self.display_tracks[tid]['last_update'] = time.time()
-                                else:
-                                    self.display_tracks[tid] = {
-                                        'bbox': list(res['bbox']),
-                                        'target_bbox': list(res['bbox']),
-                                        'name': res['name'],
-                                        'last_update': time.time()
-                                    }
-
-                    for tid in list(self.display_tracks.keys()):
-                        if tid not in active_ids:
-                            del self.display_tracks[tid]
-
-                    current_time = time.time()
-                    for res in results:
-                        if res.get('type') == 'attendance':
-                            user_id = res['user_id']
-                            dist = res['dist']
-                            encoding = res['encoding']
-
-                            if user_id not in self.last_attendance_check or current_time - self.last_attendance_check[user_id] > 600:
-                                with self.app.app_context():
-                                    try:
-                                        self.perform_attendance_callback(user_id, encoding, dist)
-                                    except Exception as e:
-                                        print(f"Attendance callback error: {e}")
-                                self.last_attendance_check[user_id] = current_time
-            except queue.Empty:
-                pass
-
-            if time.time() - self.last_ai_update_time > 2.0:
-                self.display_tracks.clear()
-
-            display_alpha = 0.35
-            face_locations = []
-            face_names = []
-
-            for tid, dt in list(self.display_tracks.items()):
-                if time.time() - dt['last_update'] > 1.5:
-                    del self.display_tracks[tid]
+                if not self.camera or not self.camera.is_opened():
+                    time.sleep(1)
                     continue
 
-                target = dt['target_bbox']
-                current = dt['bbox']
-                dt['bbox'] = [
-                    int(c + (t - c) * display_alpha)
-                    for c, t in zip(current, target)
-                ]
+                frame = self.camera.get_frame()
+                if frame is None:
+                    time.sleep(0.01)
+                    continue
 
-                bbox = dt['bbox']
-                top = bbox[1]
-                left = bbox[0]
-                bottom = bbox[1] + bbox[3]
-                right = bbox[0] + bbox[2]
-                face_locations.append((top, right, bottom, left))
-                face_names.append(dt['name'])
+                frame_count += 1
 
-            frame = self.face_recognizer.draw_faces_on_frame(frame, face_locations, face_names)
+                small_frame = cv2.resize(frame, (0, 0), fx=0.5, fy=0.5)
+                has_motion = self.motion_detector.detect(small_frame)
 
-            with self.lock:
-                self.processed_frame = frame
+                if has_motion:
+                    self.last_motion_time = time.time()
 
-            elapsed = time.time() - time.time()
+                is_device_camera = bool(self.camera and getattr(self.camera, 'camera_type', '') == 'device')
+                should_process_ai = is_device_camera or (time.time() - self.last_motion_time) < self.no_motion_delay
+
+                if should_process_ai:
+                    if not self.input_queue.full():
+                        self.input_queue.put((frame_count, frame))
+                else:
+                    self.latest_results = []
+                    self.display_tracks.clear()
+
+                try:
+                    while not self.result_queue.empty():
+                        results = self.result_queue.get_nowait()
+                        self.latest_results = results
+                        self.last_ai_update_time = time.time()
+
+                        active_ids = set()
+                        for res in results:
+                            if res.get('type') == 'display':
+                                tid = res['track_id']
+                                lost = res.get('lost', 0)
+                                if lost <= 1:
+                                    active_ids.add(tid)
+                                    if tid in self.display_tracks:
+                                        self.display_tracks[tid]['target_bbox'] = list(res['bbox'])
+                                        self.display_tracks[tid]['name'] = res['name']
+                                        self.display_tracks[tid]['last_update'] = time.time()
+                                    else:
+                                        self.display_tracks[tid] = {
+                                            'bbox': list(res['bbox']),
+                                            'target_bbox': list(res['bbox']),
+                                            'name': res['name'],
+                                            'last_update': time.time()
+                                        }
+
+                        for tid in list(self.display_tracks.keys()):
+                            if tid not in active_ids:
+                                del self.display_tracks[tid]
+
+                        current_time = time.time()
+                        for res in results:
+                            if res.get('type') == 'attendance':
+                                user_id = res['user_id']
+                                dist = res['dist']
+                                encoding = res['encoding']
+
+                                if user_id not in self.last_attendance_check or current_time - self.last_attendance_check[user_id] > 600:
+                                    with self.app.app_context():
+                                        try:
+                                            self.perform_attendance_callback(user_id, encoding, dist)
+                                        except Exception as e:
+                                            print(f"Attendance callback error: {e}")
+                                    self.last_attendance_check[user_id] = current_time
+                except queue.Empty:
+                    pass
+
+                if time.time() - self.last_ai_update_time > 2.0:
+                    self.display_tracks.clear()
+
+                display_alpha = 0.35
+                face_locations = []
+                face_names = []
+
+                for tid, dt in list(self.display_tracks.items()):
+                    if time.time() - dt['last_update'] > 1.5:
+                        del self.display_tracks[tid]
+                        continue
+
+                    target = dt['target_bbox']
+                    current = dt['bbox']
+                    dt['bbox'] = [
+                        int(c + (t - c) * display_alpha)
+                        for c, t in zip(current, target)
+                    ]
+
+                    bbox = dt['bbox']
+                    top = bbox[1]
+                    left = bbox[0]
+                    bottom = bbox[1] + bbox[3]
+                    right = bbox[0] + bbox[2]
+                    face_locations.append((top, right, bottom, left))
+                    face_names.append(dt['name'] or 'Unknown')
+
+                try:
+                    frame = self.face_recognizer.draw_faces_on_frame(frame, face_locations, face_names)
+                except Exception as e:
+                    print(f"Draw faces error: {e}")
+
+                with self.lock:
+                    self.processed_frame = frame
+
+            except Exception as e:
+                print(f"Process loop error: {e}")
+                import traceback
+                traceback.print_exc()
+                time.sleep(0.1)
+
+            elapsed = time.time() - loop_start
             sleep_time = max(0, (1.0 / PERFORMANCE_CONFIG['fps_limit']) - elapsed)
             if sleep_time > 0:
                 time.sleep(sleep_time)

@@ -7,7 +7,7 @@ import os
 import sys
 
 # Import Intel optimization config
-from config_import import INTEL_OPTIMIZATION, PERFORMANCE_CONFIG
+from backend.config import INTEL_OPTIMIZATION, PERFORMANCE_CONFIG
 
 # Set Intel CPU optimization environment variables BEFORE importing heavy modules
 os.environ.setdefault('KMP_DUPLICATE_LIB_OK', 'TRUE')

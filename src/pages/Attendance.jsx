@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { api } from '../services/api'
 
 export default function Attendance() {
@@ -12,6 +12,18 @@ export default function Attendance() {
   const videoRef = useRef(null)
   const canvasRef = useRef(null)
   const streamRef = useRef(null)
+  const imgRef = useRef(null)
+
+  const handleVideoError = useCallback(() => {
+    if (!cameraRunning) return
+    // Auto-reconnect MJPEG stream after 2 seconds
+    setTimeout(() => {
+      if (imgRef.current && cameraRunning) {
+        imgRef.current.src = ''
+        imgRef.current.src = api.videoFeedUrl() + '?t=' + Date.now()
+      }
+    }, 2000)
+  }, [cameraRunning])
 
   useEffect(() => {
     checkCameraStatus()
@@ -136,9 +148,11 @@ export default function Attendance() {
             {cameraRunning && !captureMode && (
               <div className="relative">
                 <img
+                  ref={imgRef}
                   src={api.videoFeedUrl()}
                   alt="Camera feed"
                   className="w-full rounded-lg bg-gray-900"
+                  onError={handleVideoError}
                 />
               </div>
             )}

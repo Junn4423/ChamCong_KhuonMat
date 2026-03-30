@@ -2,13 +2,14 @@ onnxruntime\capi\onnxruntime_inference_collection.py:65: UserWarning: Specified 
 WARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.
  * Running on http://127.0.0.1:5060
 Press CTRL+C to quit
-127.0.0.1 - - [27/Mar/2026 11:21:24] "GET /api/health HTTP/1.1" 200 -
-127.0.0.1 - - [27/Mar/2026 11:21:24] "GET / HTTP/1.1" 200 -
-127.0.0.1 - - [27/Mar/2026 11:21:53] "POST /api/admin_login HTTP/1.1" 401 -
-127.0.0.1 - - [27/Mar/2026 11:24:46] "POST /api/admin_login HTTP/1.1" 401 -
-127.0.0.1 - - [27/Mar/2026 11:25:17] "POST /api/admin_login HTTP/1.1" 401 -
-127.0.0.1 - - [27/Mar/2026 11:26:40] "POST /api/admin_login HTTP/1.1" 400 -
-127.0.0.1 - - [27/Mar/2026 11:31:18] "POST /api/admin_login HTTP/1.1" 400 -
-127.0.0.1 - - [27/Mar/2026 11:32:10] "POST /api/admin_login HTTP/1.1" 401 -
-127.0.0.1 - - [27/Mar/2026 11:34:28] "POST /api/admin_login HTTP/1.1" 401 -
-127.0.0.1 - - [27/Mar/2026 11:35:08] "POST /api/admin_login HTTP/1.1" 401 -
+127.0.0.1 - - [27/Mar/2026 13:58:10] "GET /api/health HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 14:06:58] "GET /api/health HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 14:07:03] "GET /api/health HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 14:07:08] "GET /api/health HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 14:14:57] "POST /api/start_camera HTTP/1.1" 200 -
+insightface\utils\transform.py:68: FutureWarning: `rcond` parameter will change to the default of machine precision times ``max(M, N)`` where M and N are the input matrix dimensions.
+To use the future default and silence this warning we advise to pass `rcond=None`, to keep using the old, explicitly pass `rcond=-1`.
+127.0.0.1 - - [27/Mar/2026 14:15:47] "GET /api/health HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 14:15:52] "GET /api/health HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 14:17:24] "GET /video_feed HTTP/1.1" 200 -
+127.0.0.1 - - [27/Mar/2026 14:18:09] "GET /api/get_today_attendance HTTP/1.1" 200 -

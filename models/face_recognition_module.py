@@ -5,7 +5,7 @@ import io
 import base64
 from PIL import Image, ImageDraw, ImageFont
 from .insightface_module import InsightFaceWrapper
-from config_import import PERFORMANCE_CONFIG
+from backend.config import PERFORMANCE_CONFIG
 
 class FaceRecognition:
     def __init__(self, det_thresh=0.5, det_size=None):
