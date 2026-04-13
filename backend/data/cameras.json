@@ -1,0 +1,114 @@
+{
+  "version": 1,
+  "updated_at": "2026-04-10T07:23:44Z",
+  "cameras": [
+    {
+      "id": "device-default",
+      "name": "EzViz Mặc định",
+      "camera_type": "rtsp",
+      "device_index": 0,
+      "rtsp_url": "rtsp://admin:SYZGBR@192.168.0.235:554/H264/ch1/sub/av_stream",
+      "enabled": true,
+      "is_default": true,
+      "camera_options": {
+        "frame_width": 1280,
+        "frame_height": 720,
+        "target_fps": 60,
+        "buffer_size": 16,
+        "frame_drop_count": 1,
+        "low_latency": true,
+        "rtsp_transport": "tcp",
+        "open_timeout_ms": 5000,
+        "read_timeout_ms": 5000
+      },
+      "processing_options": {
+        "fps_limit": 60,
+        "skip_ai_frames": 2,
+        "stream_jpeg_quality": 95,
+        "no_motion_delay": 2.0
+      }
+    },
+    {
+      "id": "ezviz-rtsp",
+      "name": "EZVIZ RTSP 2",
+      "camera_type": "rtsp",
+      "device_index": 0,
+      "rtsp_url": "",
+      "enabled": true,
+      "is_default": false,
+      "camera_options": {
+        "frame_width": 1280,
+        "frame_height": 720,
+        "target_fps": 25,
+        "buffer_size": 1,
+        "frame_drop_count": 1,
+        "low_latency": true,
+        "rtsp_transport": "tcp",
+        "open_timeout_ms": 5000,
+        "read_timeout_ms": 5000
+      },
+      "processing_options": {
+        "fps_limit": 25,
+        "skip_ai_frames": 1,
+        "stream_jpeg_quality": 88,
+        "no_motion_delay": 1.5
+      }
+    },
+    {
+      "id": "camera-m-i",
+      "name": "Camera Trình Duyệt",
+      "camera_type": "browser",
+      "device_index": 0,
+      "rtsp_url": "",
+      "enabled": true,
+      "is_default": false,
+      "camera_options": {
+        "frame_width": 1280,
+        "frame_height": 720,
+        "target_fps": 25,
+        "buffer_size": 1,
+        "frame_drop_count": 1,
+        "low_latency": true,
+        "rtsp_transport": "tcp",
+        "open_timeout_ms": 5000,
+        "read_timeout_ms": 5000,
+        "facing_mode": "user",
+        "preview_mirror": true
+      },
+      "processing_options": {
+        "fps_limit": 25,
+        "skip_ai_frames": 1,
+        "stream_jpeg_quality": 85,
+        "no_motion_delay": 2.0
+      }
+    },
+    {
+      "id": "camera-i-n-tho-i-webview",
+      "name": "Camera điện thoại / webview",
+      "camera_type": "mobile",
+      "device_index": 0,
+      "rtsp_url": "",
+      "enabled": true,
+      "is_default": false,
+      "camera_options": {
+        "frame_width": 1280,
+        "frame_height": 720,
+        "target_fps": 25,
+        "buffer_size": 1,
+        "frame_drop_count": 1,
+        "low_latency": true,
+        "rtsp_transport": "tcp",
+        "open_timeout_ms": 5000,
+        "read_timeout_ms": 5000,
+        "facing_mode": "user",
+        "preview_mirror": true
+      },
+      "processing_options": {
+        "fps_limit": 25,
+        "skip_ai_frames": 1,
+        "stream_jpeg_quality": 85,
+        "no_motion_delay": 2.0
+      }
+    }
+  ]
+}

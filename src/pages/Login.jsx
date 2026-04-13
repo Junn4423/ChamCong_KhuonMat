@@ -1,65 +1,153 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { api, setAdminToken } from '../services/api'
+import { api, setSessionToken } from '../services/api'
 
 export default function Login() {
-  const [password, setPassword] = useState('')
+  const [form, setForm] = useState({ username: '', password: '' })
+  const [rememberMe, setRememberMe] = useState(false)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+  const [checking, setChecking] = useState(true)
   const navigate = useNavigate()
 
-  async function handleSubmit(e) {
-    e.preventDefault()
+  useEffect(() => {
+    const savedRemember = localStorage.getItem('rememberLogin') === 'true'
+    if (savedRemember) {
+      const savedUser = localStorage.getItem('savedUsername') || ''
+      const savedPass = localStorage.getItem('savedPassword') || ''
+      setForm({ username: savedUser, password: savedPass })
+      setRememberMe(true)
+    }
+    checkCurrentSession()
+  }, [])
+
+  async function checkCurrentSession() {
+    try {
+      const res = await api.sessionStatus()
+      if (res.is_admin) {
+        navigate('/', { replace: true })
+        return
+      }
+    } catch {
+      // Ignore and show login form.
+    }
+    setChecking(false)
+  }
+
+  async function handleSubmit(event) {
+    event.preventDefault()
     setLoading(true)
     setError('')
+
     try {
-      const res = await api.login(password)
+      const res = await api.login(form.username, form.password)
       if (res.success) {
-        setAdminToken(res.token)
-        navigate('/manage')
+        setSessionToken(res.token)
+
+        if (rememberMe) {
+          localStorage.setItem('rememberLogin', 'true')
+          localStorage.setItem('savedUsername', form.username)
+          localStorage.setItem('savedPassword', form.password)
+        } else {
+          localStorage.removeItem('rememberLogin')
+          localStorage.removeItem('savedUsername')
+          localStorage.removeItem('savedPassword')
+        }
+
+        navigate('/', { replace: true })
       } else {
-        setError(res.message || 'Sai mật khẩu')
+        setError(res.message || 'Đăng nhập ERP thất bại')
       }
-    } catch (e) {
-      setError('Không thể kết nối server')
+    } catch {
+      setError('Không thể kết nối backend')
     }
+
     setLoading(false)
   }
 
+  if (checking) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-50">
+        <div className="flex flex-col items-center gap-3">
+          <div className="w-8 h-8 border-3 border-primary-500 border-t-transparent rounded-full animate-spin" />
+          <p className="text-sm text-slate-400">Đang kiểm tra phiên...</p>
+        </div>
+      </div>
+    )
+  }
+
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50 px-4">
-      <div className="w-full max-w-sm">
+    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-50 via-white to-primary-50 px-4">
+      <div className="w-full max-w-md">
         <div className="text-center mb-8">
-          <h1 className="text-3xl font-bold text-primary-600">FaceCheck</h1>
-          <p className="text-gray-500 mt-2">Đăng nhập Admin</p>
+          <div className="inline-flex w-24 h-24 rounded-2xl flex items-center justify-center overflow-hidden bg-white shrink-0 mb-4 shadow-lg shadow-slate-200">
+            <img src="https://sof.com.vn/logo.png" alt="SOF Logo" className="w-[80%] h-[80%] object-contain" />
+          </div>
+          <h1 className="text-3xl font-bold text-slate-800 tracking-tight">FaceCheck</h1>
+          <p className="text-slate-400 mt-2">Hệ thống chấm công nhận diện khuôn mặt</p>
         </div>
 
-        <form onSubmit={handleSubmit} className="bg-white p-6 rounded-xl shadow-sm border border-gray-200 space-y-4">
+        <form onSubmit={handleSubmit} className="bg-white p-7 rounded-2xl shadow-xl shadow-slate-200/50 border border-slate-200/60 space-y-5">
           {error && (
-            <div className="p-3 bg-red-50 text-red-700 text-sm rounded-lg border border-red-200">
+            <div className="p-3.5 bg-red-50 text-red-600 text-sm rounded-xl border border-red-100 flex items-center gap-2">
+              <span className="text-red-400">×</span>
               {error}
             </div>
           )}
+
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Mật khẩu</label>
+            <label className="block text-sm font-medium text-slate-700 mb-1.5">Tài khoản ERP</label>
             <input
-              type="password"
-              value={password}
-              onChange={e => setPassword(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
-              placeholder="Nhập mật khẩu admin"
+              type="text"
+              value={form.username}
+              onChange={event => setForm({ ...form, username: event.target.value })}
+              className="w-full px-4 py-2.5 border border-slate-300 rounded-xl focus:ring-2 focus:ring-primary-500/30 focus:border-primary-500 transition-all text-sm"
+              placeholder="Nhập mã đăng nhập ERP"
               required
               autoFocus
             />
           </div>
+
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-1.5">Mật khẩu</label>
+            <input
+              type="password"
+              value={form.password}
+              onChange={event => setForm({ ...form, password: event.target.value })}
+              className="w-full px-4 py-2.5 border border-slate-300 rounded-xl focus:ring-2 focus:ring-primary-500/30 focus:border-primary-500 transition-all text-sm"
+              placeholder="Nhập mật khẩu ERP"
+              required
+            />
+          </div>
+
+          <div className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              id="rememberMe"
+              checked={rememberMe}
+              onChange={event => setRememberMe(event.target.checked)}
+              className="w-4 h-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500 cursor-pointer"
+            />
+            <label htmlFor="rememberMe" className="text-sm text-slate-600 cursor-pointer select-none">
+              Ghi nhớ đăng nhập
+            </label>
+          </div>
+
           <button
             type="submit"
             disabled={loading}
-            className="w-full px-4 py-2.5 bg-primary-600 text-white rounded-lg font-medium hover:bg-primary-700 disabled:opacity-50"
+            className="w-full px-4 py-3 bg-gradient-to-r from-primary-600 to-primary-700 text-white rounded-xl font-semibold hover:from-primary-700 hover:to-primary-800 disabled:opacity-50 transition-all shadow-sm shadow-primary-200 text-sm"
           >
-            {loading ? 'Đang xử lý...' : 'Đăng nhập'}
+            {loading ? (
+              <span className="flex items-center justify-center gap-2">
+                <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                Đang đăng nhập...
+              </span>
+            ) : 'Đăng nhập'}
           </button>
         </form>
+
+        <p className="text-center text-xs text-slate-400 mt-6">FaceCheck v1.0 · Hệ thống nội bộ</p>
       </div>
     </div>
   )

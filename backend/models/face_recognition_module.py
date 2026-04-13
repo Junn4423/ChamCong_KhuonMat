@@ -6,6 +6,7 @@ import base64
 from PIL import Image, ImageDraw, ImageFont
 from .insightface_module import InsightFaceWrapper
 from backend.config import PERFORMANCE_CONFIG
+from backend.face_encoding_utils import normalize_face_encodings
 
 
 class FaceRecognition:
@@ -23,20 +24,12 @@ class FaceRecognition:
         temp_encodings = []
 
         for user in users:
-            if user.face_encoding is not None:
-                if isinstance(user.face_encoding, list):
-                    for encoding in user.face_encoding:
-                        enc_arr = np.array(encoding)
-                        if enc_arr.shape == (512,):
-                            temp_encodings.append(enc_arr)
-                            self.known_face_names.append(user.name)
-                            self.known_face_ids.append(user.id)
-                else:
-                    enc_arr = np.array(user.face_encoding)
-                    if enc_arr.shape == (512,):
-                        temp_encodings.append(enc_arr)
-                        self.known_face_names.append(user.name)
-                        self.known_face_ids.append(user.id)
+            for encoding in normalize_face_encodings(user.face_encoding):
+                enc_arr = np.array(encoding)
+                if enc_arr.shape == (512,):
+                    temp_encodings.append(enc_arr)
+                    self.known_face_names.append(user.name)
+                    self.known_face_ids.append(user.id)
 
         if len(temp_encodings) > 0:
             self.known_face_encodings = np.array(temp_encodings)

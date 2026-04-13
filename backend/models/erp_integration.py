@@ -1,9 +1,14 @@
 # -*- coding: utf-8 -*-
 """ERP attendance integration module."""
 
-import mysql.connector
 from datetime import datetime, timedelta
-from backend.config import ERP_MAIN_CONFIG, ATTENDANCE_TABLE, ATTENDANCE_COLUMNS, CAMERA_CONFIG
+from backend.config import (
+    ERP_FETCH_MODE,
+    ERP_MAIN_CONFIG,
+    ATTENDANCE_TABLE,
+    ATTENDANCE_COLUMNS,
+    CAMERA_CONFIG,
+)
 import logging
 
 logger = logging.getLogger(__name__)
@@ -16,15 +21,22 @@ class ERPAttendanceIntegration:
         self.columns = ATTENDANCE_COLUMNS
         self.camera_ip = CAMERA_CONFIG['ip']
         self.default_source = CAMERA_CONFIG['default_source']
+        self.http_mode = ERP_FETCH_MODE == 'http_service'
 
     def get_connection(self):
+        if self.http_mode:
+            return None
         try:
+            import mysql.connector
             return mysql.connector.connect(**self.config)
-        except mysql.connector.Error as e:
+        except Exception as e:
             logger.error(f"ERP DB connection error: {e}")
             return None
 
     def test_connection(self):
+        if self.http_mode:
+            logger.info("ERP attendance HTTP API is not exposed by the provided services.")
+            return False
         try:
             conn = self.get_connection()
             if conn:
@@ -40,6 +52,8 @@ class ERPAttendanceIntegration:
             return False
 
     def check_table_exists(self):
+        if self.http_mode:
+            return False
         try:
             conn = self.get_connection()
             if not conn:
@@ -55,6 +69,9 @@ class ERPAttendanceIntegration:
             return False
 
     def create_attendance_record(self, employee_id, attendance_time=None, attendance_code=None):
+        if self.http_mode:
+            logger.warning("Skipping ERP attendance write because no HTTP attendance API was provided.")
+            return False
         try:
             if not attendance_time:
                 attendance_time = datetime.now()
@@ -94,6 +111,8 @@ class ERPAttendanceIntegration:
             return False
 
     def get_attendance_history(self, employee_id, days=7):
+        if self.http_mode:
+            return []
         try:
             conn = self.get_connection()
             if not conn:
@@ -122,6 +141,8 @@ class ERPAttendanceIntegration:
             return []
 
     def check_recent_attendance(self, employee_id, minutes=10):
+        if self.http_mode:
+            return False
         try:
             conn = self.get_connection()
             if not conn:

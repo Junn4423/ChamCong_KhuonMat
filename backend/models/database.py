@@ -69,3 +69,25 @@ class Attendance(db.Model):
 
     def __repr__(self):
         return f'<Attendance {self.user_id} - {self.date}>'
+
+
+class AttendanceLocation(db.Model):
+    __tablename__ = 'attendance_locations'
+
+    id = db.Column(db.Integer, primary_key=True)
+    attendance_id = db.Column(db.Integer, db.ForeignKey('attendance.id'), nullable=False, index=True)
+    latitude = db.Column(db.Float)
+    longitude = db.Column(db.Float)
+    accuracy = db.Column(db.Float)
+    label = db.Column(db.String(255))
+    source = db.Column(db.String(32), default='client')
+    raw = db.Column(db.Text)
+    captured_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+    attendance = db.relationship(
+        'Attendance',
+        backref=db.backref('locations', lazy=True, cascade='all, delete-orphan'),
+    )
+
+    def __repr__(self):
+        return f'<AttendanceLocation attendance={self.attendance_id} lat={self.latitude} lng={self.longitude}>'

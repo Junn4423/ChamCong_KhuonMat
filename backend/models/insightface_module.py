@@ -22,7 +22,10 @@ ANTI_SPOOF_SRC_DIR = os.path.join(PROJECT_ROOT, 'Silent-Face-Anti-Spoofing', 'sr
 if ANTI_SPOOF_SRC_DIR not in sys.path:
     sys.path.append(ANTI_SPOOF_SRC_DIR)
 
-from generate_patches import CropImage
+try:
+    from generate_patches import CropImage
+except ImportError:
+    CropImage = None
 
 
 def parse_model_name(model_name):
@@ -59,6 +62,8 @@ def get_default_anti_spoof_dirs(model_dir):
 
 class OnnxAntiSpoofingWrapper:
     def __init__(self, model_dir='Silent-Face-Anti-Spoofing/resources/anti_spoof_models'):
+        if CropImage is None:
+            raise ImportError('generate_patches (Silent-Face-Anti-Spoofing) not available')
         import onnxruntime as ort
 
         self.cropper = CropImage()
@@ -111,6 +116,8 @@ class OnnxAntiSpoofingWrapper:
 
 class TorchAntiSpoofingWrapper:
     def __init__(self, model_dir='Silent-Face-Anti-Spoofing/resources/anti_spoof_models', device_id=0):
+        if CropImage is None:
+            raise ImportError('generate_patches (Silent-Face-Anti-Spoofing) not available')
         import torch
 
         self.cropper = CropImage()

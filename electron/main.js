@@ -1,5 +1,6 @@
 const { app, BrowserWindow, dialog, session } = require('electron');
 const path = require('path');
+const fs = require('fs');
 const { spawn } = require('child_process');
 const net = require('net');
 
@@ -21,32 +22,79 @@ function findFreePort(startPort) {
   });
 }
 
+function findRepoRoot(startDir) {
+  let current = path.resolve(startDir);
+
+  for (let depth = 0; depth < 8; depth += 1) {
+    const packageJson = path.join(current, 'package.json');
+    if (fs.existsSync(packageJson)) {
+      return current;
+    }
+
+    const parent = path.dirname(current);
+    if (parent === current) {
+      break;
+    }
+    current = parent;
+  }
+
+  return null;
+}
+
+function resolveBackendDataDir() {
+  if (process.env.FACECHECK_DATA_DIR) {
+    return process.env.FACECHECK_DATA_DIR;
+  }
+
+  const searchRoots = isDev
+    ? [path.resolve(__dirname, '..')]
+    : [
+        process.resourcesPath,
+        path.dirname(process.execPath),
+        path.resolve(process.resourcesPath, '..'),
+        path.resolve(process.resourcesPath, '..', '..'),
+      ];
+
+  for (const root of searchRoots) {
+    const repoRoot = findRepoRoot(root);
+    if (repoRoot) {
+      return path.join(repoRoot, 'instance');
+    }
+  }
+
+  return path.join(app.getPath('userData'), 'instance');
+}
+
 function startPythonBackend(port) {
   return new Promise((resolve, reject) => {
     let pythonExe;
     let args;
+    let cwd;
+    const backendDataDir = resolveBackendDataDir();
 
     if (isDev) {
-      // Development: run Python directly
-      pythonExe = 'python';
-      args = ['-c', `
-import sys
-sys.path.insert(0, '.')
-from backend.app import create_app
-app = create_app()
-app.run(host='127.0.0.1', port=${port}, debug=False)
-`];
+      const repoRoot = path.resolve(__dirname, '..');
+      const venvPython = path.join(repoRoot, 'venv_build', 'Scripts', 'python.exe');
+      pythonExe = fs.existsSync(venvPython) ? venvPython : 'python';
+      args = ['run_backend.py', '--port', String(port)];
+      cwd = repoRoot;
     } else {
       // Production: run bundled Python executable
       const resourcesPath = process.resourcesPath;
       pythonExe = path.join(resourcesPath, 'python-backend', 'facecheck-api', 'facecheck-api.exe');
       args = ['--port', String(port)];
+      cwd = path.dirname(pythonExe);
     }
 
     console.log(`Starting Python backend: ${pythonExe}`);
+    console.log(`Using backend data dir: ${backendDataDir}`);
     pythonProcess = spawn(pythonExe, args, {
-      cwd: isDev ? __dirname.replace(/[\\/]electron$/, '') : path.dirname(pythonExe),
-      env: { ...process.env, FLASK_PORT: String(port) },
+      cwd,
+      env: {
+        ...process.env,
+        FLASK_PORT: String(port),
+        FACECHECK_DATA_DIR: backendDataDir,
+      },
       stdio: ['pipe', 'pipe', 'pipe'],
     });
 

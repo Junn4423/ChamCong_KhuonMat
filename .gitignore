@@ -12,14 +12,9 @@ __pycache__/
 *.egg-info/
 dist/
 build/
-eggs/
-parts/
 var/
 sdist/
 wheels/
-pip-wheel-metadata/
-share/python-wheels/
-.installed.cfg
 MANIFEST
 
 # Virtual environments
@@ -27,7 +22,6 @@ venv/
 venv_build/
 .venv/
 env/
-ENV/
 
 # ============================================================
 # Node / Frontend
@@ -36,11 +30,8 @@ node_modules/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
-pnpm-debug.log*
-.pnpm-store/
-.npm/
 
-# Vite / build outputs
+# Vite build output
 dist/
 dist-ssr/
 
@@ -54,7 +45,7 @@ dist-ssr/
 !.env.example
 
 # ============================================================
-# Database & Instance
+# Database & Instance (runtime data)
 # ============================================================
 instance/
 *.db
@@ -66,27 +57,23 @@ instance/
 # ============================================================
 logs/
 *.log
-npm-debug.log*
 crash_log.txt
 test_stdout.txt
 test_stderr.txt
-pm2-*.log
 
 # ============================================================
 # AI Model Cache
 # ============================================================
 openvino_cache/
 .cache/
-*.onnx.cache/
 
 # ============================================================
 # Build / Release artifacts
 # ============================================================
 release/
-release5/
-release6/
 python-dist/
 build/
+*.spec
 *.spec.bak
 builder-debug.yml
 builder-effective-config.yaml
@@ -103,12 +90,10 @@ backups/
 # ============================================================
 .vscode/
 .idea/
+.cursor/
 *.swp
 *.swo
 *~
-.project
-.classpath
-.settings/
 *.sublime-project
 *.sublime-workspace
 
@@ -116,15 +101,9 @@ backups/
 # OS
 # ============================================================
 Thumbs.db
-Thumbs.db:encdata
 Desktop.ini
 $RECYCLE.BIN/
 .DS_Store
-.AppleDouble
-.LSOverride
-._*
-.Spotlight-V100
-.Trashes
 
 # ============================================================
 # Misc
@@ -138,4 +117,3 @@ $RECYCLE.BIN/
 coverage/
 .coverage
 htmlcov/
-

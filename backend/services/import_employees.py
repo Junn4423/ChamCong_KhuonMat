@@ -1,172 +1,115 @@
 # -*- coding: utf-8 -*-
-"""ERP bulk import module."""
+"""ERP bulk import module backed by HTTP services."""
 
-import mysql.connector
-import os
 import io
-import tempfile
 
+from backend.face_encoding_utils import normalize_face_encodings
 from backend.models.database import db, User
-from backend.models.face_recognition_module import FaceRecognition
-from backend.config import (
-    ERP_MAIN_CONFIG, ERP_DOCS_CONFIG,
-    EMPLOYEE_TABLE, EMPLOYEE_COLUMNS,
-    IMAGE_TABLE, IMAGE_COLUMNS,
-    IMPORT_CONFIG
-)
+from backend.services.erp_http_client import ERPServiceError, erp_http_client
+
+try:  # Optional when AI dependencies are not installed.
+    from backend.models.face_recognition_module import FaceRecognition
+except Exception:  # pragma: no cover
+    FaceRecognition = None
 
 
 class ERPImporter:
-    def __init__(self, face_recognizer=None):
-        self.erp_main_config = ERP_MAIN_CONFIG
-        self.erp_docs_config = ERP_DOCS_CONFIG
-        if face_recognizer:
+    def __init__(self, face_recognizer=None, erp_client=None, save_image_callback=None):
+        self.erp_client = erp_client or erp_http_client
+        if face_recognizer is not None:
             self.face_recognizer = face_recognizer
-        else:
+        elif FaceRecognition is not None:
             self.face_recognizer = FaceRecognition(det_thresh=0.1, det_size=(640, 640))
+        else:
+            self.face_recognizer = None
+        self.save_image_callback = save_image_callback
         self.imported_count = 0
         self.skipped_count = 0
         self.error_count = 0
+        self.without_face_count = 0
 
-    def connect_to_erp_main(self):
-        try:
-            return mysql.connector.connect(**self.erp_main_config)
-        except mysql.connector.Error as e:
-            print(f"ERP main DB error: {e}")
-            return None
+    def get_employees_from_erp(self, auth):
+        return self.erp_client.list_employees(auth)
 
-    def connect_to_erp_docs(self):
-        try:
-            return mysql.connector.connect(**self.erp_docs_config)
-        except mysql.connector.Error as e:
-            print(f"ERP docs DB error: {e}")
-            return None
-
-    def get_employees_from_erp(self):
-        conn = self.connect_to_erp_main()
-        if not conn:
-            return []
-        try:
-            cursor = conn.cursor(dictionary=True)
-            query = f"""
-                SELECT
-                    {EMPLOYEE_COLUMNS['employee_id']} as employee_id,
-                    {EMPLOYEE_COLUMNS['name']} as name,
-                    {EMPLOYEE_COLUMNS['department']} as department,
-                    {EMPLOYEE_COLUMNS['position']} as position
-                FROM {EMPLOYEE_TABLE}
-                WHERE {EMPLOYEE_COLUMNS['employee_id']} IS NOT NULL
-                  AND {EMPLOYEE_COLUMNS['name']} IS NOT NULL
-                  AND {EMPLOYEE_COLUMNS['employee_id']} != ''
-                  AND {EMPLOYEE_COLUMNS['name']} != ''
-            """
-            cursor.execute(query)
-            employees = cursor.fetchall()
-            return employees
-        except mysql.connector.Error as e:
-            print(f"Employee query error: {e}")
-            return []
-        finally:
-            conn.close()
-
-    def get_employee_image(self, employee_id):
-        conn = self.connect_to_erp_docs()
-        if not conn:
-            return None
-        try:
-            cursor = conn.cursor()
-            query = f"""
-                SELECT {IMAGE_COLUMNS['image_blob']}
-                FROM {IMAGE_TABLE}
-                WHERE {IMAGE_COLUMNS['employee_id']} = %s
-                  AND {IMAGE_COLUMNS['image_blob']} IS NOT NULL
-                LIMIT 1
-            """
-            cursor.execute(query, (employee_id,))
-            result = cursor.fetchone()
-            if result and len(result) > 0 and result[0] is not None:
-                return result[0]
-            return None
-        except mysql.connector.Error as e:
-            print(f"Image query error for {employee_id}: {e}")
-            return None
-        finally:
-            conn.close()
+    def get_employee_image(self, auth, employee_data):
+        image_data = self.erp_client.get_employee_profile_image(
+            auth,
+            employee_data['employee_id'],
+            employee=employee_data,
+        )
+        return image_data['bytes']
 
     def blob_to_face_encoding(self, blob_data):
         try:
-            with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as temp_file:
-                temp_file.write(blob_data)
-                temp_file_path = temp_file.name
-            try:
-                with open(temp_file_path, 'rb') as image_file:
-                    face_encoding, error = self.face_recognizer.encode_face_from_image(image_file)
-                    return face_encoding, error
-            finally:
-                os.unlink(temp_file_path)
+            if self.face_recognizer is None:
+                return None, 'Face recognizer not available'
+            image_file = io.BytesIO(blob_data)
+            face_encoding, error = self.face_recognizer.encode_face_from_image(image_file)
+            return face_encoding, error
         except Exception as e:
             return None, f"Image processing error: {str(e)}"
 
-    def import_employee(self, employee_data):
+    def import_employee(self, auth, employee_data):
         employee_id = employee_data['employee_id']
         name = employee_data['name']
         department = employee_data.get('department', '')
-        position = employee_data.get('position', '')
 
-        if IMPORT_CONFIG['skip_existing']:
-            existing = User.query.filter_by(employee_id=employee_id).first()
-            if existing:
-                self.skipped_count += 1
-                return False
+        existing = User.query.filter_by(employee_id=employee_id).first()
+        if existing:
+            self.skipped_count += 1
+            return False
 
-        image_blob = self.get_employee_image(employee_id)
-        if not image_blob:
-            if IMPORT_CONFIG['require_image']:
-                self.error_count += 1
-                return False
+        image_blob = None
+        face_encoding_value = []
 
-        face_encoding = None
+        try:
+            image_blob = self.get_employee_image(auth, employee_data)
+        except ERPServiceError:
+            image_blob = None
+
         if image_blob:
             face_encoding, error = self.blob_to_face_encoding(image_blob)
-            if error:
-                self.error_count += 1
-                return False
-
-        if face_encoding is None:
-            self.error_count += 1
-            return False
+            if not error and face_encoding is not None:
+                face_encoding_value = normalize_face_encodings(face_encoding)
+            else:
+                self.without_face_count += 1
+        else:
+            self.without_face_count += 1
 
         new_user = User(
             name=name,
             employee_id=employee_id,
             department=department,
-            position=position,
-            face_encoding=face_encoding
+            face_encoding=face_encoding_value,
         )
         db.session.add(new_user)
         db.session.commit()
+        if self.save_image_callback and image_blob:
+            self.save_image_callback(employee_id, image_blob)
         self.imported_count += 1
         return True
 
-    def import_all_employees(self):
-        employees = self.get_employees_from_erp()
+    def import_all_employees(self, auth):
+        employees = self.get_employees_from_erp(auth)
         if not employees:
             return {'imported': 0, 'skipped': 0, 'errors': 0, 'total': 0}
 
         self.imported_count = 0
         self.skipped_count = 0
         self.error_count = 0
+        self.without_face_count = 0
 
         for emp in employees:
             try:
-                self.import_employee(emp)
-            except Exception as e:
-                print(f"Import error for {emp.get('employee_id')}: {e}")
+                self.import_employee(auth, emp)
+            except Exception:
+                db.session.rollback()
                 self.error_count += 1
 
         return {
             'imported': self.imported_count,
             'skipped': self.skipped_count,
             'errors': self.error_count,
-            'total': len(employees)
+            'without_face': self.without_face_count,
+            'total': len(employees),
         }

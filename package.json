@@ -14,6 +14,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "lucide-react": "^1.7.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-router-dom": "^6.28.0",
@@ -46,7 +47,9 @@
       {
         "from": "python-dist/",
         "to": "python-backend",
-        "filter": ["**/*"]
+        "filter": [
+          "**/*"
+        ]
       }
     ],
     "win": {

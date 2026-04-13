@@ -3,6 +3,7 @@ import numpy as np
 import threading
 import time
 import queue
+import os
 from datetime import datetime, date
 from backend.config import CAMERA_CONFIG, PERFORMANCE_CONFIG, MOTION_CONFIG
 from backend.services.tracking_service import SimpleTracker
@@ -141,21 +142,71 @@ def ai_worker(input_queue, result_queue, initial_known_faces, engine, config_ove
 
 
 class Camera:
-    def __init__(self, camera_type='rtsp', device_index=0, rtsp_url=None):
+    def __init__(self, camera_type='rtsp', device_index=0, rtsp_url=None, options=None):
         self.camera_type = camera_type
         self.device_index = int(device_index) if str(device_index).isdigit() else 0
         self.rtsp_url = rtsp_url or CAMERA_CONFIG.get('rtsp_url')
         self.flip_mode = CAMERA_CONFIG.get('flip_mode', 'auto')
+        self.options = options or {}
         self.source = self.rtsp_url if self.camera_type == 'rtsp' else self.device_index
-        self.video = cv2.VideoCapture(self.source)
+        self.video = None
         self.is_running = True
-        self.is_connected = self.video.isOpened()
+        self.is_connected = False
         self.lock = threading.Lock()
         self.frame = None
-        self.reconnect_delay = 5
+        self.reconnect_delay = float(self.options.get('reconnect_delay', 5) or 5)
+        if self.reconnect_delay < 1:
+            self.reconnect_delay = 1
+        if self.reconnect_delay > 30:
+            self.reconnect_delay = 30
 
+        self._open_capture()
         self.thread = threading.Thread(target=self._reader, daemon=True)
         self.thread.start()
+
+    def _set_capture_property(self, prop_name, value):
+        if self.video is None:
+            return
+        prop = getattr(cv2, prop_name, None)
+        if prop is None:
+            return
+        try:
+            self.video.set(prop, value)
+        except Exception:
+            pass
+
+    def _build_ffmpeg_options(self):
+        transport = (self.options.get('rtsp_transport') or 'tcp').strip().lower() or 'tcp'
+        low_latency = bool(self.options.get('low_latency', True))
+        parts = [f'rtsp_transport;{transport}']
+        if low_latency:
+            parts.extend([
+                'fflags;nobuffer',
+                'flags;low_delay',
+                'max_delay;500000',
+                'probesize;32768',
+                'analyzeduration;0',
+            ])
+        return '|'.join(parts)
+
+    def _open_capture(self):
+        if self.camera_type == 'rtsp':
+            try:
+                os.environ['OPENCV_FFMPEG_CAPTURE_OPTIONS'] = self._build_ffmpeg_options()
+            except Exception:
+                pass
+
+        self.video = cv2.VideoCapture(self.source)
+        self.is_connected = bool(self.video and self.video.isOpened())
+        if not self.is_connected:
+            return
+
+        self._set_capture_property('CAP_PROP_BUFFERSIZE', int(self.options.get('buffer_size', 1)))
+        self._set_capture_property('CAP_PROP_FRAME_WIDTH', int(self.options.get('frame_width', 1280)))
+        self._set_capture_property('CAP_PROP_FRAME_HEIGHT', int(self.options.get('frame_height', 720)))
+        self._set_capture_property('CAP_PROP_FPS', int(self.options.get('target_fps', 25)))
+        self._set_capture_property('CAP_PROP_OPEN_TIMEOUT_MSEC', int(self.options.get('open_timeout_ms', 5000)))
+        self._set_capture_property('CAP_PROP_READ_TIMEOUT_MSEC', int(self.options.get('read_timeout_ms', 5000)))
 
     def _apply_flip(self, frame):
         mode = self.flip_mode
@@ -172,13 +223,18 @@ class Camera:
     def _reader(self):
         while self.is_running:
             if not self.is_connected:
-                self.video.release()
-                self.video = cv2.VideoCapture(self.source)
-                if self.video.isOpened():
-                    self.is_connected = True
-                else:
+                if self.video:
+                    self.video.release()
+                self._open_capture()
+                if not self.is_connected:
                     time.sleep(self.reconnect_delay)
                     continue
+
+            frame_drop_count = int(self.options.get('frame_drop_count', 0) or 0)
+            if frame_drop_count > 0:
+                for _ in range(frame_drop_count):
+                    if not self.video.grab():
+                        break
 
             ret, frame = self.video.read()
             if not ret:
@@ -237,21 +293,106 @@ class AttendanceService:
         self.last_motion_time = time.time()
         self.no_motion_delay = 2.0
 
+        self.camera_options = {
+            'frame_width': 1280,
+            'frame_height': 720,
+            'target_fps': 25,
+            'buffer_size': 1,
+            'frame_drop_count': 0,
+            'low_latency': True,
+            'rtsp_transport': 'tcp',
+            'open_timeout_ms': 5000,
+            'read_timeout_ms': 5000,
+        }
+        self.processing_options = {
+            'fps_limit': PERFORMANCE_CONFIG['fps_limit'],
+            'skip_ai_frames': 1,
+            'stream_jpeg_quality': 80,
+            'no_motion_delay': 2.0,
+        }
+
         self.input_queue = queue.Queue(maxsize=2)
         self.result_queue = queue.Queue()
 
-    def start(self, camera_type=None, device_index=None, rtsp_url=None):
+    @staticmethod
+    def _coerce_int(value, default, min_value=None, max_value=None):
+        try:
+            val = int(value)
+        except (TypeError, ValueError):
+            val = int(default)
+        if min_value is not None:
+            val = max(min_value, val)
+        if max_value is not None:
+            val = min(max_value, val)
+        return val
+
+    @staticmethod
+    def _coerce_float(value, default, min_value=None, max_value=None):
+        try:
+            val = float(value)
+        except (TypeError, ValueError):
+            val = float(default)
+        if min_value is not None:
+            val = max(min_value, val)
+        if max_value is not None:
+            val = min(max_value, val)
+        return val
+
+    def _normalize_camera_options(self, camera_options, camera_type):
+        src = camera_options or {}
+        normalized = {
+            'frame_width': self._coerce_int(src.get('frame_width', 1280), 1280, 320, 3840),
+            'frame_height': self._coerce_int(src.get('frame_height', 720), 720, 240, 2160),
+            'target_fps': self._coerce_int(src.get('target_fps', 25), 25, 5, 60),
+            'buffer_size': self._coerce_int(src.get('buffer_size', 1 if camera_type == 'rtsp' else 2), 1, 1, 16),
+            'frame_drop_count': self._coerce_int(src.get('frame_drop_count', 1 if camera_type == 'rtsp' else 0), 0, 0, 8),
+            'low_latency': bool(src.get('low_latency', True)),
+            'rtsp_transport': (src.get('rtsp_transport') or 'tcp'),
+            'open_timeout_ms': self._coerce_int(src.get('open_timeout_ms', 5000), 5000, 1000, 30000),
+            'read_timeout_ms': self._coerce_int(src.get('read_timeout_ms', 5000), 5000, 1000, 30000),
+        }
+        return normalized
+
+    def _normalize_processing_options(self, processing_options):
+        src = processing_options or {}
+        normalized = {
+            'fps_limit': self._coerce_int(src.get('fps_limit', PERFORMANCE_CONFIG['fps_limit']), PERFORMANCE_CONFIG['fps_limit'], 5, 60),
+            'skip_ai_frames': self._coerce_int(src.get('skip_ai_frames', 1), 1, 1, 8),
+            'stream_jpeg_quality': self._coerce_int(src.get('stream_jpeg_quality', 80), 80, 40, 95),
+            'no_motion_delay': self._coerce_float(src.get('no_motion_delay', 2.0), 2.0, 0.0, 10.0),
+        }
+        return normalized
+
+    def get_stream_jpeg_quality(self):
+        return int(self.processing_options.get('stream_jpeg_quality', 80))
+
+    def get_runtime_status(self):
+        return {
+            'camera_options': dict(self.camera_options),
+            'processing_options': dict(self.processing_options),
+            'no_motion_delay': self.no_motion_delay,
+            'camera_type': getattr(self.camera, 'camera_type', None),
+            'camera_source': getattr(self.camera, 'source', None),
+        }
+
+    def start(self, camera_type=None, device_index=None, rtsp_url=None, camera_options=None, processing_options=None):
         if self.is_running:
             return True
 
         resolved_camera_type = camera_type or CAMERA_CONFIG.get('default_camera_type', 'rtsp')
         resolved_device_index = CAMERA_CONFIG.get('device_index', 0) if device_index is None else device_index
         resolved_rtsp_url = rtsp_url or CAMERA_CONFIG.get('rtsp_url')
+        resolved_camera_options = self._normalize_camera_options(camera_options, resolved_camera_type)
+        resolved_processing_options = self._normalize_processing_options(processing_options)
+        self.camera_options = resolved_camera_options
+        self.processing_options = resolved_processing_options
+        self.no_motion_delay = resolved_processing_options.get('no_motion_delay', 2.0)
 
         self.camera = Camera(
             camera_type=resolved_camera_type,
             device_index=resolved_device_index,
-            rtsp_url=resolved_rtsp_url
+            rtsp_url=resolved_rtsp_url,
+            options=resolved_camera_options,
         )
         if not self.camera.is_opened():
             if resolved_camera_type == 'rtsp':
@@ -259,7 +400,8 @@ class AttendanceService:
                 self.camera = Camera(
                     camera_type='device',
                     device_index=resolved_device_index,
-                    rtsp_url=resolved_rtsp_url
+                    rtsp_url=resolved_rtsp_url,
+                    options=self._normalize_camera_options(resolved_camera_options, 'device'),
                 )
             if not self.camera.is_opened():
                 return False
@@ -350,7 +492,8 @@ class AttendanceService:
                 should_process_ai = is_device_camera or (time.time() - self.last_motion_time) < self.no_motion_delay
 
                 if should_process_ai:
-                    if not self.input_queue.full():
+                    skip_ai_frames = max(1, int(self.processing_options.get('skip_ai_frames', 1)))
+                    if frame_count % skip_ai_frames == 0 and not self.input_queue.full():
                         self.input_queue.put((frame_count, frame))
                 else:
                     self.latest_results = []
@@ -444,6 +587,7 @@ class AttendanceService:
                 time.sleep(0.1)
 
             elapsed = time.time() - loop_start
-            sleep_time = max(0, (1.0 / PERFORMANCE_CONFIG['fps_limit']) - elapsed)
+            fps_limit = max(1, int(self.processing_options.get('fps_limit', PERFORMANCE_CONFIG['fps_limit'])))
+            sleep_time = max(0, (1.0 / fps_limit) - elapsed)
             if sleep_time > 0:
                 time.sleep(sleep_time)

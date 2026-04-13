@@ -6,6 +6,25 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+ERP_FETCH_MODE = os.getenv('ERP_FETCH_MODE', 'http_service').lower()
+ERP_HTTP_SERVICE_URL = os.getenv(
+    'ERP_HTTP_SERVICE_URL',
+    'http://192.168.1.20/erpdung-hao/services/erpv1/services.sof.vn/index.php',
+)
+ERP_HTTP_LOGIN_URL = os.getenv(
+    'ERP_HTTP_LOGIN_URL',
+    'http://192.168.1.20/erpdung-hao/services/erpv1/login.sof.vn/index.php',
+)
+ERP_HTTP_TIMEOUT = int(os.getenv('ERP_HTTP_TIMEOUT', 10))
+ERP_HTTP_IMAGE_COLUMN = os.getenv('ERP_HTTP_IMAGE_COLUMN', 'lv008')
+
+MYSQL_USE_PURE = os.getenv('MYSQL_USE_PURE', 'true').lower() != 'false'
+MYSQL_COMMON_CONFIG = {
+    'charset': 'utf8mb4',
+    'connection_timeout': 3,
+    'use_pure': MYSQL_USE_PURE,
+}
+
 # ERP Main Database (employee info)
 ERP_MAIN_CONFIG = {
     'host': os.getenv('ERP_HOST', '192.168.1.82'),
@@ -13,8 +32,7 @@ ERP_MAIN_CONFIG = {
     'user': os.getenv('ERP_USER', 'faceuser'),
     'password': os.getenv('ERP_PASSWORD', 'THU@1982'),
     'database': os.getenv('ERP_DATABASE', 'erp_sofv4_0'),
-    'charset': 'utf8mb4',
-    'connection_timeout': 3,
+    **MYSQL_COMMON_CONFIG,
 }
 
 # ERP Documents Database (employee images)
@@ -24,8 +42,7 @@ ERP_DOCS_CONFIG = {
     'user': os.getenv('ERP_DOCS_USER', 'faceuser'),
     'password': os.getenv('ERP_DOCS_PASSWORD', 'THU@1982'),
     'database': os.getenv('ERP_DOCS_DATABASE', 'erp_sof_documents_v4_0'),
-    'charset': 'utf8mb4',
-    'connection_timeout': 3,
+    **MYSQL_COMMON_CONFIG,
 }
 
 # Table/Column mappings
@@ -34,7 +51,6 @@ EMPLOYEE_COLUMNS = {
     'employee_id': 'lv001',
     'name': 'lv002',
     'department': 'lv003',
-    'position': 'lv004'
 }
 
 IMAGE_TABLE = 'hr_lv0041'

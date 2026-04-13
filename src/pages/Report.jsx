@@ -1,42 +1,35 @@
-import { useState, useEffect } from 'react'
-import { useNavigate } from 'react-router-dom'
+import React, { useEffect, useState, useMemo } from 'react'
 import { api } from '../services/api'
+import { Download, Search } from 'lucide-react'
 
 export default function Report() {
   const [date, setDate] = useState(new Date().toISOString().split('T')[0])
   const [records, setRecords] = useState([])
   const [loading, setLoading] = useState(false)
-  const [isAdmin, setIsAdmin] = useState(false)
-  const navigate = useNavigate()
+
+  // Pagination
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(10)
 
   useEffect(() => {
-    checkAuth()
-  }, [])
+    setPage(1)
+    loadReport()
+  }, [date])
 
-  useEffect(() => {
-    if (isAdmin) loadReport()
-  }, [date, isAdmin])
+  const paginatedRecords = useMemo(() => {
+    const startIndex = (page - 1) * pageSize
+    return records.slice(startIndex, startIndex + pageSize)
+  }, [records, page, pageSize])
 
-  async function checkAuth() {
-    try {
-      const res = await api.authStatus()
-      if (res.is_admin) {
-        setIsAdmin(true)
-      } else {
-        navigate('/login')
-      }
-    } catch (e) {
-      navigate('/login')
-    }
-  }
+  const totalPages = Math.ceil(records.length / pageSize)
 
   async function loadReport() {
     setLoading(true)
     try {
       const res = await api.getReport(date)
       if (res.success) setRecords(res.records)
-    } catch (e) {
-      console.error(e)
+    } catch (error) {
+      console.error(error)
     }
     setLoading(false)
   }
@@ -44,21 +37,23 @@ export default function Report() {
   function exportCSV() {
     if (records.length === 0) return
     const headers = ['Tên', 'Mã NV', 'Phòng ban', 'Giờ vào', 'Giờ ra', 'Trạng thái']
-    const rows = records.map(r => [
-      r.name, r.employee_id, r.department,
-      r.check_in_time, r.check_out_time, r.status,
+    const rows = records.map(record => [
+      record.name,
+      record.employee_id,
+      record.department,
+      record.check_in_time,
+      record.check_out_time,
+      record.status,
     ])
-    const csv = [headers, ...rows].map(r => r.join(',')).join('\n')
+    const csv = [headers, ...rows].map(row => row.join(',')).join('\n')
     const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8;' })
     const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `attendance_${date}.csv`
-    a.click()
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = `attendance_${date}.csv`
+    anchor.click()
     URL.revokeObjectURL(url)
   }
-
-  if (!isAdmin) return null
 
   return (
     <div className="space-y-6">
@@ -68,21 +63,23 @@ export default function Report() {
         <input
           type="date"
           value={date}
-          onChange={e => setDate(e.target.value)}
+          onChange={event => setDate(event.target.value)}
           className="px-3 py-2 border border-gray-300 rounded-lg text-sm"
         />
         <button
           onClick={loadReport}
           disabled={loading}
-          className="px-4 py-2 bg-primary-600 text-white rounded-lg text-sm font-medium hover:bg-primary-700 disabled:opacity-50"
+          className="flex items-center gap-2 px-4 py-2 bg-primary-600 text-white rounded-lg text-sm font-medium hover:bg-primary-700 disabled:opacity-50"
         >
+          <Search size={16} />
           Xem báo cáo
         </button>
         <button
           onClick={exportCSV}
           disabled={records.length === 0}
-          className="px-4 py-2 bg-gray-100 text-gray-600 rounded-lg text-sm font-medium hover:bg-gray-200 disabled:opacity-50"
+          className="flex items-center gap-2 px-4 py-2 bg-gray-100 text-gray-600 rounded-lg text-sm font-medium hover:bg-gray-200 disabled:opacity-50"
         >
+          <Download size={16} />
           Xuất CSV
         </button>
       </div>
@@ -105,27 +102,84 @@ export default function Report() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-50">
-                {records.map((rec, i) => (
-                  <tr key={i} className="hover:bg-gray-50">
-                    <td className="px-4 py-3 text-gray-400">{i + 1}</td>
-                    <td className="px-4 py-3 font-medium text-gray-800">{rec.name}</td>
-                    <td className="px-4 py-3 text-gray-600">{rec.employee_id}</td>
-                    <td className="px-4 py-3 text-gray-600">{rec.department}</td>
-                    <td className="px-4 py-3 text-gray-600">{rec.check_in_time}</td>
-                    <td className="px-4 py-3 text-gray-600">{rec.check_out_time || '-'}</td>
+                {paginatedRecords.map((record, index) => (
+                  <tr key={`${record.employee_id}-${index}`} className="hover:bg-gray-50">
+                    <td className="px-4 py-3 text-gray-400">{(page - 1) * pageSize + index + 1}</td>
+                    <td className="px-4 py-3 font-medium text-gray-800">{record.name}</td>
+                    <td className="px-4 py-3 text-gray-600">{record.employee_id}</td>
+                    <td className="px-4 py-3 text-gray-600">{record.department}</td>
+                    <td className="px-4 py-3 text-gray-600">{record.check_in_time}</td>
+                    <td className="px-4 py-3 text-gray-600">{record.check_out_time || '-'}</td>
                     <td className="px-4 py-3">
                       <span className={`inline-block px-2 py-1 text-xs rounded-full font-medium ${
-                        rec.status === 'Đúng giờ'
+                        record.status === 'Đúng giờ'
                           ? 'bg-green-50 text-green-700'
                           : 'bg-yellow-50 text-yellow-700'
                       }`}>
-                        {rec.status}
+                        {record.status}
                       </span>
                     </td>
                   </tr>
                 ))}
               </tbody>
             </table>
+
+            {records.length > 0 && (
+              <div className="px-5 py-4 border-t border-gray-200 flex items-center justify-between flex-wrap gap-4">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm text-gray-500">Hiển thị</span>
+                  <select
+                    value={pageSize}
+                    onChange={e => setPageSize(Number(e.target.value))}
+                    className="border border-gray-300 rounded-lg px-2 py-1 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
+                  >
+                    <option value={5}>5</option>
+                    <option value={10}>10</option>
+                    <option value={20}>20</option>
+                    <option value={50}>50</option>
+                    <option value={100}>100</option>
+                  </select>
+                  <span className="text-sm text-gray-500">trên tổng {records.length}</span>
+                </div>
+                
+                {totalPages > 1 && (
+                  <div className="flex gap-1">
+                    <button
+                      onClick={() => setPage(p => Math.max(1, p - 1))}
+                      disabled={page === 1}
+                      className="px-3 py-1 rounded-lg border border-gray-200 text-sm font-medium hover:bg-gray-50 disabled:opacity-50 text-gray-600"
+                    >
+                      Trước
+                    </button>
+                    {Array.from({ length: totalPages }, (_, i) => i + 1)
+                      .filter(p => p === 1 || p === totalPages || Math.abs(p - page) <= 1)
+                      .map((p, i, arr) => (
+                        <React.Fragment key={p}>
+                          {i > 0 && arr[i - 1] !== p - 1 && <span className="px-2 py-1 text-gray-400">...</span>}
+                          <button
+                            onClick={() => setPage(p)}
+                            className={`px-3 py-1 rounded-lg text-sm font-medium transition-colors ${
+                              page === p
+                                ? 'bg-primary-600 text-white'
+                                : 'border border-gray-200 text-gray-600 hover:bg-gray-50'
+                            }`}
+                          >
+                            {p}
+                          </button>
+                        </React.Fragment>
+                      ))}
+                    <button
+                      onClick={() => setPage(p => Math.min(totalPages, p + 1))}
+                      disabled={page === totalPages}
+                      className="px-3 py-1 rounded-lg border border-gray-200 text-sm font-medium hover:bg-gray-50 disabled:opacity-50 text-gray-600"
+                    >
+                      Sau
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+
             {records.length === 0 && (
               <div className="px-5 py-12 text-center text-gray-400">
                 Không có dữ liệu điểm danh cho ngày này
