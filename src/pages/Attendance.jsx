@@ -10,6 +10,8 @@ const FIXED_BROWSER_CAMERA_ID = 'fixed-browser-camera'
 const BROWSER_DEVICE_STORAGE_PREFIX = 'attendance-browser-device:'
 const LIVE_DETECT_INTERVAL_MS = 900
 const LIVE_DETECT_MAX_WIDTH = 480
+const AUTO_ATTENDANCE_COOLDOWN_MS = 120000
+const AUTO_ATTENDANCE_STREAK_REQUIRED = 2
 
 const FIXED_BROWSER_CAMERA = {
   id: FIXED_BROWSER_CAMERA_ID,
@@ -417,6 +419,8 @@ export default function Attendance() {
   const [liveDetections, setLiveDetections] = useState([])
   const [liveDetectionFrame, setLiveDetectionFrame] = useState({ width: 0, height: 0 })
   const [liveDetectionError, setLiveDetectionError] = useState('')
+  const [liveRecognizeEnabled, setLiveRecognizeEnabled] = useState(true)
+  const [autoAttendanceEnabled, setAutoAttendanceEnabled] = useState(false)
   const [previewViewport, setPreviewViewport] = useState({ width: 0, height: 0 })
   const [browserDevices, setBrowserDevices] = useState([])
   const [browserDevicesLoading, setBrowserDevicesLoading] = useState(false)
@@ -430,6 +434,9 @@ export default function Attendance() {
   const locationTimerRef = useRef(null)
   const detectTimerRef = useRef(null)
   const detectInFlightRef = useRef(false)
+  const autoAttendanceInFlightRef = useRef(false)
+  const autoAttendanceStreakRef = useRef({ userId: null, count: 0 })
+  const autoAttendanceCooldownRef = useRef({})
   const browserStreamRef = useRef(null)
 
   const selectedCamera = useMemo(
@@ -559,6 +566,8 @@ export default function Attendance() {
       setLiveDetections([])
       setLiveDetectionFrame({ width: 0, height: 0 })
       setLiveDetectionError('')
+      autoAttendanceStreakRef.current = { userId: null, count: 0 }
+      autoAttendanceInFlightRef.current = false
       return undefined
     }
 
@@ -586,23 +595,94 @@ export default function Attendance() {
 
         context.drawImage(video, 0, 0, targetWidth, targetHeight)
 
+        const recognizeRealtime = liveRecognizeEnabled || autoAttendanceEnabled
+
         const res = await api.attendanceDetectFrame({
           image_base64: detectCanvas.toDataURL('image/jpeg', 0.65),
           max_faces: 3,
-          recognize: false,
+          recognize: recognizeRealtime,
+          tolerance: 0.5,
         })
 
         if (cancelled) return
 
         if (res?.success) {
-          setLiveDetections(Array.isArray(res.detections) ? res.detections : [])
+          const detections = Array.isArray(res.detections) ? res.detections : []
+          setLiveDetections(detections)
           setLiveDetectionFrame({
             width: Number(res.frame_width) || targetWidth,
             height: Number(res.frame_height) || targetHeight,
           })
           setLiveDetectionError('')
+
+          if (autoAttendanceEnabled && recognizeRealtime && !autoAttendanceInFlightRef.current) {
+            const matchedDetections = detections.filter(
+              item => Boolean(item?.matched) && item?.user_id != null,
+            )
+
+            if (matchedDetections.length === 0) {
+              autoAttendanceStreakRef.current = { userId: null, count: 0 }
+            } else {
+              const candidate = matchedDetections[0]
+              const candidateUserId = String(candidate.user_id)
+              const streak = autoAttendanceStreakRef.current
+
+              if (streak.userId === candidateUserId) {
+                streak.count += 1
+              } else {
+                streak.userId = candidateUserId
+                streak.count = 1
+              }
+
+              const now = Date.now()
+              const lastAttemptAt = Number(autoAttendanceCooldownRef.current[candidateUserId] || 0)
+              const cooldownPassed = now - lastAttemptAt >= AUTO_ATTENDANCE_COOLDOWN_MS
+
+              if (streak.count >= AUTO_ATTENDANCE_STREAK_REQUIRED && cooldownPassed) {
+                autoAttendanceCooldownRef.current[candidateUserId] = now
+                autoAttendanceInFlightRef.current = true
+                setAttendanceBusy(true)
+
+                try {
+                  const payloadLocation = (locationEnabled && locationInfo) ? locationInfo : null
+                  const submitRes = await api.checkAttendance(candidate.user_id, payloadLocation)
+
+                  if (submitRes?.success) {
+                    setAttendanceFeedback({
+                      type: 'success',
+                      message: `${submitRes.message} (Tự động)`,
+                      detail: submitRes.location_text || '',
+                    })
+                    await loadTodayRecords()
+                  } else {
+                    const failureMessage = submitRes?.message || 'Không thể tự động điểm danh'
+                    const isAlreadyChecked = failureMessage.toLowerCase().includes('10 phút')
+                      || failureMessage.toLowerCase().includes('gần đây')
+
+                    setAttendanceFeedback({
+                      type: isAlreadyChecked ? 'success' : 'error',
+                      message: isAlreadyChecked
+                        ? `${failureMessage} (đã có bản ghi gần thời điểm hiện tại)`
+                        : failureMessage,
+                      detail: '',
+                    })
+                  }
+                } catch (error) {
+                  setAttendanceFeedback({
+                    type: 'error',
+                    message: error?.message || 'Không thể tự động điểm danh',
+                    detail: '',
+                  })
+                } finally {
+                  autoAttendanceInFlightRef.current = false
+                  setAttendanceBusy(false)
+                }
+              }
+            }
+          }
         } else {
           setLiveDetectionError(res?.message || 'Không nhận được dữ liệu nhận diện realtime')
+          autoAttendanceStreakRef.current = { userId: null, count: 0 }
         }
       } catch (error) {
         if (!cancelled) {
@@ -624,8 +704,19 @@ export default function Attendance() {
         detectTimerRef.current = null
       }
       detectInFlightRef.current = false
+      autoAttendanceInFlightRef.current = false
+      autoAttendanceStreakRef.current = { userId: null, count: 0 }
     }
-  }, [attendanceBusy, browserCameraSelected, cameraRunning, cameraRuntimeMode])
+  }, [
+    attendanceBusy,
+    autoAttendanceEnabled,
+    browserCameraSelected,
+    cameraRunning,
+    cameraRuntimeMode,
+    liveRecognizeEnabled,
+    locationEnabled,
+    locationInfo,
+  ])
 
   useEffect(() => {
     if (!cameraRunning || cameraRuntimeMode !== 'browser') return
@@ -1073,6 +1164,17 @@ export default function Attendance() {
       .filter(Boolean)
   }, [liveDetections, liveDetectionFrame, previewViewport, previewMirror])
 
+  const liveRecognizedNames = useMemo(() => {
+    const names = []
+    for (const detection of liveDetections) {
+      if (!detection?.matched) continue
+      const name = String(detection?.name || '').trim()
+      if (!name || name === 'Unknown') continue
+      if (!names.includes(name)) names.push(name)
+    }
+    return names
+  }, [liveDetections])
+
   return (
     <div className="grid xl:grid-cols-[1.1fr_0.9fr] gap-4 lg:gap-6">
       <div className="bg-white rounded-2xl shadow-sm border border-slate-200/60 overflow-hidden">
@@ -1179,6 +1281,58 @@ export default function Attendance() {
               <span>Realtime detect: {liveDetections.length} khuôn mặt</span>
               <span>Refresh: ~{(LIVE_DETECT_INTERVAL_MS / 1000).toFixed(1)}s</span>
               {liveDetectionError && <span className="text-red-600">{liveDetectionError}</span>}
+            </div>
+          )}
+
+          {browserCameraSelected && cameraRunning && cameraRuntimeMode === 'browser' && (
+            <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs sm:text-sm text-slate-700 space-y-2">
+              <div className="flex flex-wrap items-center gap-4">
+                <label className="inline-flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={liveRecognizeEnabled}
+                    onChange={event => {
+                      const enabled = event.target.checked
+                      setLiveRecognizeEnabled(enabled)
+                      if (!enabled) {
+                        setAutoAttendanceEnabled(false)
+                      }
+                    }}
+                    className="rounded border-slate-300"
+                  />
+                  <span>Nhận dạng realtime</span>
+                </label>
+
+                <label className="inline-flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={autoAttendanceEnabled}
+                    onChange={event => {
+                      const enabled = event.target.checked
+                      setAutoAttendanceEnabled(enabled)
+                      if (enabled) {
+                        setLiveRecognizeEnabled(true)
+                      }
+                    }}
+                    className="rounded border-slate-300"
+                  />
+                  <span>Tự điểm danh (không cần bấm chụp)</span>
+                </label>
+              </div>
+
+              {liveRecognizeEnabled && (
+                <p className="text-slate-600">
+                  {liveRecognizedNames.length > 0
+                    ? `Đang nhận dạng: ${liveRecognizedNames.join(', ')}`
+                    : 'Đang nhận dạng: chưa có khuôn mặt khớp'}
+                </p>
+              )}
+
+              {autoAttendanceEnabled && (
+                <p className="text-slate-500">
+                  Hệ thống sẽ tự điểm danh khi khuôn mặt được nhận dạng ổn định {AUTO_ATTENDANCE_STREAK_REQUIRED} khung liên tiếp.
+                </p>
+              )}
             </div>
           )}
 
