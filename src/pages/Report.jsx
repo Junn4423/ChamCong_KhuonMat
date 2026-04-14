@@ -91,6 +91,30 @@ function getStatusTone(status) {
     : 'bg-yellow-50 text-yellow-700'
 }
 
+function describeLocationText(locationText) {
+  const raw = String(locationText || '').trim()
+  if (!raw) return '-'
+
+  const pattern = /^(.*?)\s*\(([-\d.]+),\s*([-\d.]+)(?:\s*±(\d+)m)?\)$/
+  const match = raw.match(pattern)
+  if (!match) return raw
+
+  const label = (match[1] || '').trim()
+  const lat = match[2]
+  const lng = match[3]
+  const accuracy = match[4]
+
+  const parts = []
+  if (label) {
+    parts.push(`Nguồn: ${label}`)
+  }
+  parts.push(`Tọa độ: ${lat}, ${lng}`)
+  if (accuracy) {
+    parts.push(`Sai số GPS: ±${accuracy}m`)
+  }
+  return parts.join(' | ')
+}
+
 export default function Report() {
   const { toast } = useToast()
   const [date, setDate] = useState(new Date().toISOString().split('T')[0])
@@ -152,16 +176,25 @@ export default function Report() {
 
   function exportCSV() {
     if (records.length === 0) return
-    const headers = ['Tên', 'Mã NV', 'Phòng ban', 'Giờ vào', 'Giờ ra', 'Trạng thái']
+    const toCsvCell = (value) => {
+      const text = String(value ?? '')
+      return `"${text.replace(/"/g, '""')}"`
+    }
+
+    const headers = ['Tên', 'Mã NV', 'Phòng ban', 'Giờ vào', 'Giờ ra', 'Vị trí checkin', 'Vị trí checkout', 'Trạng thái']
     const rows = records.map(record => [
       record.name,
       record.employee_id,
       record.department,
       record.check_in_time,
       record.check_out_time,
+      record.check_in_location || '',
+      record.check_out_location || '',
       record.status,
     ])
-    const csv = [headers, ...rows].map(row => row.join(',')).join('\n')
+    const csv = [headers, ...rows]
+      .map(row => row.map(toCsvCell).join(','))
+      .join('\n')
     const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8;' })
     const url = URL.createObjectURL(blob)
     const anchor = document.createElement('a')
@@ -239,6 +272,9 @@ export default function Report() {
 
       <div>
         <h1 className="text-2xl font-bold text-gray-800">Báo cáo điểm danh</h1>
+        <p className="text-sm text-gray-500 mt-1">
+          Vị trí được hiển thị theo định dạng: nguồn vị trí, tọa độ GPS và sai số GPS tại thời điểm chấm công.
+        </p>
         {isInternalMode && (
           <p className="text-sm text-amber-700 mt-1">
             Đang ở chế độ nội bộ. Khi bấm đẩy dữ liệu, hệ thống sẽ yêu cầu đăng nhập hệ thống.
@@ -285,7 +321,7 @@ export default function Report() {
         ) : (
           <div>
             <div className="hidden lg:block overflow-x-auto">
-              <table className="w-full text-sm min-w-[920px]">
+              <table className="w-full text-sm min-w-[1180px]">
                 <thead className="bg-gray-50">
                   <tr>
                     <th className="px-4 py-3 text-left font-medium text-gray-600">#</th>
@@ -294,6 +330,8 @@ export default function Report() {
                     <th className="px-4 py-3 text-left font-medium text-gray-600">Phòng ban</th>
                     <th className="px-4 py-3 text-left font-medium text-gray-600">Giờ vào</th>
                     <th className="px-4 py-3 text-left font-medium text-gray-600">Giờ ra</th>
+                    <th className="px-4 py-3 text-left font-medium text-gray-600">Vị trí checkin</th>
+                    <th className="px-4 py-3 text-left font-medium text-gray-600">Vị trí checkout</th>
                     <th className="px-4 py-3 text-left font-medium text-gray-600">Trạng thái</th>
                   </tr>
                 </thead>
@@ -306,6 +344,8 @@ export default function Report() {
                       <td className="px-4 py-3 text-gray-600">{record.department}</td>
                       <td className="px-4 py-3 text-gray-600">{record.check_in_time}</td>
                       <td className="px-4 py-3 text-gray-600">{record.check_out_time || '-'}</td>
+                      <td className="px-4 py-3 text-gray-600 max-w-[260px] whitespace-normal break-words">{describeLocationText(record.check_in_location)}</td>
+                      <td className="px-4 py-3 text-gray-600 max-w-[260px] whitespace-normal break-words">{describeLocationText(record.check_out_location)}</td>
                       <td className="px-4 py-3">
                         <span className={`inline-block px-2 py-1 text-xs rounded-full font-medium ${getStatusTone(record.status)}`}>
                           {record.status}
@@ -334,6 +374,8 @@ export default function Report() {
                   <div className="mt-2 grid grid-cols-2 gap-2 text-xs text-gray-600">
                     <p>Giờ vào: {record.check_in_time || '-'}</p>
                     <p>Giờ ra: {record.check_out_time || '-'}</p>
+                    <p className="col-span-2">Vị trí checkin: {describeLocationText(record.check_in_location)}</p>
+                    <p className="col-span-2">Vị trí checkout: {describeLocationText(record.check_out_location)}</p>
                   </div>
                 </div>
               ))}

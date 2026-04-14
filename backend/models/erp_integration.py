@@ -83,6 +83,9 @@ class ERPAttendanceIntegration:
                 return False
 
             cursor = conn.cursor()
+            attendance_type = str(attendance_code or '').strip().upper() or 'IN'
+            if attendance_type not in {'IN', 'OUT'}:
+                attendance_type = 'IN'
             query = f"""
                 INSERT INTO {self.table} (
                     {self.columns['employee_id']},
@@ -97,7 +100,7 @@ class ERPAttendanceIntegration:
                 employee_id,
                 attendance_date,
                 attendance_time_str,
-                'IN',
+                attendance_type,
                 self.default_source,
                 self.camera_ip
             )

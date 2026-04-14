@@ -4,6 +4,33 @@ import { Image as ImageIcon, X, Loader2, RotateCw } from 'lucide-react'
 import { api } from '../services/api'
 import { useToast } from '../components/Toast'
 
+function EmployeeListAvatar({ imageUrl, name }) {
+  const [imageFailed, setImageFailed] = useState(false)
+
+  useEffect(() => {
+    setImageFailed(false)
+  }, [imageUrl])
+
+  const label = ((name || '').trim().charAt(0) || '?').toUpperCase()
+  if (imageUrl && !imageFailed) {
+    return (
+      <img
+        src={imageUrl}
+        alt={name || 'employee'}
+        className="w-10 h-10 object-cover rounded-xl border border-slate-200 shadow-sm"
+        loading="lazy"
+        onError={() => setImageFailed(true)}
+      />
+    )
+  }
+
+  return (
+    <div className="w-10 h-10 rounded-xl border-2 border-dashed border-slate-200 bg-slate-50 flex items-center justify-center text-[10px] text-slate-400 font-semibold">
+      {label}
+    </div>
+  )
+}
+
 function getManageStatusBadge(employee) {
   const statusCode = (employee?.status_code || '').toLowerCase()
 
@@ -440,7 +467,7 @@ export default function ManageFaces() {
   }
 
   function handleRegisterFace(employee) {
-    navigate(`/register?employee_id=${encodeURIComponent(employee.employee_id)}`)
+    navigate(`/dong-bo-nhan-vien-online?employee_id=${encodeURIComponent(employee.employee_id)}`)
   }
 
   const filterButtons = [
@@ -460,7 +487,7 @@ export default function ManageFaces() {
 
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div>
-          <h1 className="text-2xl font-bold text-slate-800 tracking-tight">Quản lý nhân viên</h1>
+          <h1 className="text-2xl font-bold text-slate-800 tracking-tight">Quản lý nhân viên offline</h1>
           {isInternalMode && (
             <p className="text-sm text-amber-700 mt-1">Đang ở chế độ nội bộ. Nút đẩy ERP đã bị khóa.</p>
           )}
@@ -564,8 +591,20 @@ export default function ManageFaces() {
                       />
                     </td>
                     <td className="px-4 py-3">
-                      <p className="font-medium text-slate-800">{employee.name}</p>
-                      <p className="text-xs text-slate-400">{employee.created_at}</p>
+                      <div className="flex items-center gap-3">
+                        <button
+                          type="button"
+                          onClick={() => handleViewImage(employee)}
+                          className="rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-500/30"
+                          title={employee.has_local_image ? 'Xem ảnh local' : 'Chưa có ảnh local'}
+                        >
+                          <EmployeeListAvatar imageUrl={employee.image_url} name={employee.name} />
+                        </button>
+                        <div>
+                          <p className="font-medium text-slate-800">{employee.name}</p>
+                          <p className="text-xs text-slate-400">{employee.created_at}</p>
+                        </div>
+                      </div>
                     </td>
                     <td className="px-4 py-3 text-slate-600 font-mono text-xs">{employee.employee_id}</td>
                     <td className="px-4 py-3 text-slate-500">{employee.department || '-'}</td>
@@ -581,12 +620,7 @@ export default function ManageFaces() {
                     </td>
                     <td className="px-4 py-3 text-center">
                       {employee.has_local_image ? (
-                        <button
-                          onClick={() => handleViewImage(employee)}
-                          className="px-3 py-1.5 bg-blue-50 text-blue-700 rounded-lg text-xs font-medium hover:bg-blue-100 transition-colors border border-blue-200"
-                        >
-                          Xem ảnh
-                        </button>
+                        <span className="text-xs text-emerald-700 font-medium">Đã có ảnh local</span>
                       ) : (
                         <span className="text-xs text-slate-400">Chưa có ảnh</span>
                       )}
@@ -664,6 +698,15 @@ export default function ManageFaces() {
                         disabled={bulkDeleting}
                         className="mt-1 w-4 h-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500/30 disabled:opacity-60"
                       />
+
+                      <button
+                        type="button"
+                        onClick={() => handleViewImage(employee)}
+                        className="rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-500/30"
+                        title={employee.has_local_image ? 'Xem ảnh local' : 'Chưa có ảnh local'}
+                      >
+                        <EmployeeListAvatar imageUrl={employee.image_url} name={employee.name} />
+                      </button>
 
                       <div className="min-w-0 flex-1">
                         <p className="font-semibold text-slate-800 truncate">{employee.name}</p>

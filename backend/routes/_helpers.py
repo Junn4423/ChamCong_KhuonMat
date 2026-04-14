@@ -380,10 +380,7 @@ def save_attendance_location(attendance_id, location_payload, source='client'):
     return location_row
 
 
-def serialize_attendance_location(attendance_id):
-    row = AttendanceLocation.query.filter_by(attendance_id=attendance_id).order_by(
-        AttendanceLocation.captured_at.desc()
-    ).first()
+def _serialize_location_row(row):
     if not row:
         return None
     payload = {
@@ -396,6 +393,67 @@ def serialize_attendance_location(attendance_id):
     }
     payload['text'] = location_to_text(payload)
     return payload
+
+
+def _extract_attendance_location_stage(source):
+    src = (source or '').strip().lower()
+    if src.startswith('checkin'):
+        return 'checkin'
+    if src.startswith('checkout'):
+        return 'checkout'
+    return ''
+
+
+def serialize_attendance_locations(attendance_id):
+    rows = AttendanceLocation.query.filter_by(attendance_id=attendance_id).order_by(
+        AttendanceLocation.captured_at.asc(),
+        AttendanceLocation.id.asc(),
+    ).all()
+    if not rows:
+        return {
+            'checkin': None,
+            'checkout': None,
+            'latest': None,
+        }
+
+    checkin_payload = None
+    checkout_payload = None
+    unknown_payloads = []
+
+    for row in rows:
+        payload = _serialize_location_row(row)
+        stage = _extract_attendance_location_stage(row.source)
+        if stage == 'checkin':
+            if checkin_payload is None:
+                checkin_payload = payload
+        elif stage == 'checkout':
+            checkout_payload = payload
+        else:
+            unknown_payloads.append(payload)
+
+    latest_payload = _serialize_location_row(rows[-1])
+
+    if checkin_payload is None and unknown_payloads:
+        checkin_payload = unknown_payloads[0]
+
+    if checkout_payload is None:
+        if len(unknown_payloads) >= 2:
+            checkout_payload = unknown_payloads[-1]
+        elif latest_payload and checkin_payload and latest_payload != checkin_payload:
+            checkout_payload = latest_payload
+
+    return {
+        'checkin': checkin_payload,
+        'checkout': checkout_payload,
+        'latest': latest_payload,
+    }
+
+
+def serialize_attendance_location(attendance_id):
+    payloads = serialize_attendance_locations(attendance_id)
+    if not isinstance(payloads, dict):
+        return None
+    return payloads.get('latest')
 
 
 # ─── Session / Auth helpers ──────────────────────────────────────────────

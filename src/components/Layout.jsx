@@ -7,8 +7,8 @@ const navItems = [
   { to: '/', label: 'Trang chủ', icon: Home },
   { to: '/attendance', label: 'Điểm danh', icon: Camera },
   { to: '/cameras', label: 'Camera', icon: Video },
-  { to: '/register', label: 'Khuôn mặt', icon: UserPlus },
-  { to: '/manage', label: 'Quản lý', icon: Settings },
+  { to: '/dong-bo-nhan-vien-online', label: 'Đồng bộ nhân viên online', icon: UserPlus },
+  { to: '/quan-ly-nhan-vien-offline', label: 'Quản lý nhân viên offline', icon: Settings },
   { to: '/report', label: 'Báo cáo', icon: BarChart },
 ]
 

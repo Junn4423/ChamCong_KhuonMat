@@ -638,7 +638,7 @@ export default function Register() {
     <div className="space-y-4 md:space-y-6">
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div className="space-y-1">
-          <h1 className="text-2xl font-bold text-slate-800 tracking-tight">Đăng ký khuôn mặt</h1>
+          <h1 className="text-2xl font-bold text-slate-800 tracking-tight">Đồng bộ nhân viên online</h1>
           <p className="text-sm text-slate-500">
             Đồng bộ danh sách ERP về đây để quản lý trước, sau đó mới đẩy dữ liệu sang hệ thống chấm công.
           </p>
@@ -788,32 +788,6 @@ export default function Register() {
                           <Eye size={14} />
                           Xem
                         </button>
-
-                        <button
-                          type="button"
-                          onClick={event => handleActionClick(employee.employee_id, event)}
-                          disabled={!employee.registered || detailLoading || submitLoading}
-                          className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-                            employee.registered
-                              ? 'bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100'
-                              : 'bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed'
-                          }`}
-                        >
-                          Cập nhật thông tin mới
-                        </button>
-
-                        <button
-                          type="button"
-                          onClick={event => handleActionClick(employee.employee_id, event)}
-                          disabled={employee.registered || detailLoading || submitLoading}
-                          className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-                            employee.registered
-                              ? 'bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed'
-                              : 'bg-primary-600 text-white hover:bg-primary-700'
-                          }`}
-                        >
-                          Đăng ký khuôn mặt
-                        </button>
                       </div>
                     </td>
                   </tr>
@@ -860,30 +834,6 @@ export default function Register() {
                   >
                     <Eye size={14} />
                     Xem
-                  </button>
-                  <button
-                    type="button"
-                    onClick={event => handleActionClick(employee.employee_id, event)}
-                    disabled={!employee.registered || detailLoading || submitLoading}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-                      employee.registered
-                        ? 'bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100'
-                        : 'bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed'
-                    }`}
-                  >
-                    Cập nhật
-                  </button>
-                  <button
-                    type="button"
-                    onClick={event => handleActionClick(employee.employee_id, event)}
-                    disabled={employee.registered || detailLoading || submitLoading}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-                      employee.registered
-                        ? 'bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed'
-                        : 'bg-primary-600 text-white hover:bg-primary-700'
-                    }`}
-                  >
-                    Đăng ký
                   </button>
                 </div>
               </div>

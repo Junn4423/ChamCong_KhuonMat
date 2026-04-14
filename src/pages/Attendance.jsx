@@ -645,7 +645,7 @@ export default function Attendance() {
 
                 try {
                   const payloadLocation = (locationEnabled && locationInfo) ? locationInfo : null
-                  const submitRes = await api.checkAttendance(candidate.user_id, payloadLocation)
+                  const submitRes = await api.checkAttendance(candidate.user_id, payloadLocation, 'checkin')
 
                   if (submitRes?.success) {
                     setAttendanceFeedback({
@@ -991,7 +991,7 @@ export default function Attendance() {
     setCameraLoading(false)
   }
 
-  async function captureBrowserAttendance() {
+  async function captureBrowserAttendance(attendanceType = 'checkin') {
     if (!cameraRunning || cameraRuntimeMode !== 'browser') {
       window.alert('Hãy bật camera trình duyệt trước khi điểm danh.')
       return
@@ -1017,10 +1017,16 @@ export default function Attendance() {
     setAttendanceBusy(true)
     setAttendanceFeedback(null)
 
+    const normalizedAttendanceType = String(attendanceType || 'checkin').toLowerCase() === 'checkout'
+      ? 'checkout'
+      : 'checkin'
+    const actionLabel = normalizedAttendanceType === 'checkout' ? 'Checkout' : 'Checkin'
+
     try {
       const payload = {
         image_base64: canvas.toDataURL('image/jpeg', 0.9),
         include_preview: true,
+        attendance_type: normalizedAttendanceType,
       }
 
       if (locationEnabled && locationInfo) {
@@ -1040,14 +1046,14 @@ export default function Attendance() {
       if (res.success) {
         setAttendanceFeedback({
           type: 'success',
-          message: res.message,
+          message: res.message || `${actionLabel} thành công`,
           detail: res.location_text || '',
         })
         await loadTodayRecords()
       } else {
         setAttendanceFeedback({
           type: 'error',
-          message: res.message || 'Không thể điểm danh bằng camera trình duyệt',
+          message: res.message || `Không thể ${actionLabel} bằng camera trình duyệt`,
           detail: '',
         })
       }
@@ -1089,7 +1095,6 @@ export default function Attendance() {
   }
 
   async function updateBrowserLocation() {
-    if (!locationEnabled) return
     setLocationBusy(true)
     setLocationError('')
     try {
@@ -1107,17 +1112,20 @@ export default function Attendance() {
       const res = await api.updateLocationState(payload)
       if (res.success) {
         setLocationInfo(res.location || payload.location)
+        return true
       } else {
         setLocationError(res.message || 'Không cập nhật được location')
+        return false
       }
     } catch (error) {
       setLocationError(error?.message || 'Không lấy được location')
+      return false
+    } finally {
+      setLocationBusy(false)
     }
-    setLocationBusy(false)
   }
 
   async function toggleLocation(nextEnabled) {
-    setLocationEnabled(nextEnabled)
     setLocationError('')
 
     if (!nextEnabled) {
@@ -1127,12 +1135,15 @@ export default function Attendance() {
         if (res.success) setLocationInfo(res.location || null)
       } catch (error) {
         console.error(error)
+      } finally {
+        setLocationEnabled(false)
+        setLocationBusy(false)
       }
-      setLocationBusy(false)
       return
     }
 
-    await updateBrowserLocation()
+    const updated = await updateBrowserLocation()
+    setLocationEnabled(updated)
   }
 
   const showActiveCameraWarning = cameraRunning && activeCameraId && selectedCameraId && activeCameraId !== selectedCameraId
@@ -1260,11 +1271,18 @@ export default function Attendance() {
           {browserCameraSelected && cameraRunning && cameraRuntimeMode === 'browser' && (
             <div className="flex items-center gap-2 flex-wrap">
               <button
-                onClick={captureBrowserAttendance}
+                onClick={() => captureBrowserAttendance('checkin')}
                 disabled={attendanceBusy}
                 className="w-full sm:w-auto px-4 py-2.5 bg-emerald-600 text-white rounded-xl text-sm font-semibold hover:bg-emerald-700 disabled:opacity-50 transition-colors shadow-sm"
               >
-                {attendanceBusy ? 'Đang nhận diện...' : 'Chụp và điểm danh'}
+                {attendanceBusy ? 'Đang xử lý...' : 'Checkin'}
+              </button>
+              <button
+                onClick={() => captureBrowserAttendance('checkout')}
+                disabled={attendanceBusy}
+                className="w-full sm:w-auto px-4 py-2.5 bg-amber-500 text-white rounded-xl text-sm font-semibold hover:bg-amber-600 disabled:opacity-50 transition-colors shadow-sm"
+              >
+                {attendanceBusy ? 'Đang xử lý...' : 'Checkout'}
               </button>
               <span className="text-xs text-slate-500">Đặt khuôn mặt gọn trong vùng bo tròn rồi bấm chụp.</span>
             </div>
@@ -1493,18 +1511,33 @@ export default function Attendance() {
             <div>
               <h2 className="text-lg font-semibold text-slate-800">Location</h2>
               <p className="text-sm text-slate-500 mt-1">
-                Bật để gửi vị trí hiện tại cùng dữ liệu chấm công.
+                Bật GPS để xin quyền truy cập vị trí, sau đó hệ thống sẽ lưu vị trí tại thời điểm chấm công.
               </p>
             </div>
-            <label className="inline-flex items-center gap-2 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={locationEnabled}
-                onChange={event => toggleLocation(event.target.checked)}
-                className="w-4 h-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500"
-              />
-              <span className="text-sm font-medium text-slate-700">Bật location</span>
-            </label>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => toggleLocation(!locationEnabled)}
+                disabled={locationBusy}
+                className={`px-3 py-2 rounded-xl text-sm font-medium transition-colors disabled:opacity-50 ${
+                  locationEnabled
+                    ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200'
+                    : 'bg-primary-600 text-white hover:bg-primary-700'
+                }`}
+              >
+                {locationBusy
+                  ? 'Đang xử lý...'
+                  : (locationEnabled ? 'Tắt GPS' : 'Bật GPS')}
+              </button>
+              <button
+                type="button"
+                onClick={() => updateBrowserLocation()}
+                disabled={locationBusy || !locationEnabled}
+                className="px-3 py-2 rounded-xl text-sm font-medium bg-slate-100 text-slate-700 hover:bg-slate-200 disabled:opacity-50"
+              >
+                Lấy lại vị trí
+              </button>
+            </div>
           </div>
 
           <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
@@ -1530,21 +1563,25 @@ export default function Attendance() {
               </div>
             ) : (
               todayRecords.map((record, index) => (
-                <div key={`${record.employee_id}-${record.time}-${index}`} className="px-5 py-4 flex items-start justify-between gap-4">
+                <div key={`${record.employee_id}-${record.check_in_time || record.time}-${record.check_out_time || ''}-${index}`} className="px-5 py-4 flex items-start justify-between gap-4">
                   <div>
                     <p className="font-semibold text-slate-800">{record.name}</p>
                     <p className="text-sm text-slate-500 mt-1">
                       {record.employee_id} · {record.department || 'Chưa có phòng ban'}
                     </p>
-                    {record.location_text && (
-                      <p className="text-xs text-slate-400 mt-1">{record.location_text}</p>
+                    {record.check_in_location_text && (
+                      <p className="text-xs text-slate-400 mt-1">Vị trí Checkin: {record.check_in_location_text}</p>
+                    )}
+                    {record.check_out_location_text && (
+                      <p className="text-xs text-slate-400 mt-1">Vị trí Checkout: {record.check_out_location_text}</p>
                     )}
                   </div>
                   <div className="text-right shrink-0">
                     <span className="inline-flex px-2.5 py-1 rounded-full text-xs font-medium bg-amber-50 text-amber-700">
                       {record.status || 'Điểm danh'}
                     </span>
-                    <p className="text-sm text-slate-500 mt-2">{record.time || '--:--:--'}</p>
+                    <p className="text-sm text-slate-500 mt-2">Vào: {record.check_in_time || record.time || '--:--:--'}</p>
+                    <p className="text-sm text-slate-500">Ra: {record.check_out_time || '--:--:--'}</p>
                   </div>
                 </div>
               ))

@@ -182,8 +182,11 @@ def create_app():
             last_attendance = Attendance.query.filter_by(
                 user_id=user_id, date=today
             ).order_by(Attendance.check_in_time.desc()).first()
+            if last_attendance and not last_attendance.check_out_time:
+                return
+
             if last_attendance:
-                last_time = last_attendance.check_in_time
+                last_time = last_attendance.check_out_time or last_attendance.check_in_time
                 if (current_time - last_time).total_seconds() < 600:
                     return
 
@@ -207,7 +210,7 @@ def create_app():
             runtime_loc = get_runtime_location()
             if runtime_loc:
                 try:
-                    save_attendance_location(new_attendance.id, runtime_loc, source='runtime')
+                    save_attendance_location(new_attendance.id, runtime_loc, source='checkin_runtime')
                 except Exception as loc_exc:
                     db.session.rollback()
                     print(f"Auto attendance location save error: {loc_exc}")

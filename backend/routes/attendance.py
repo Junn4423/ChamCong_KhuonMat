@@ -23,10 +23,165 @@ from backend.routes._helpers import (
     parse_location_payload, location_to_text,
     get_runtime_location, save_attendance_location,
     serialize_attendance_location,
+    serialize_attendance_locations,
     resolve_request_auth_mode,
 )
 
 attendance_bp = Blueprint('attendance', __name__)
+
+
+def _normalize_attendance_type(value):
+    attendance_type = str(value or 'checkin').strip().lower()
+    if attendance_type in {'checkout', 'check_out', 'out'}:
+        return 'checkout'
+    return 'checkin'
+
+
+def _attendance_type_label(attendance_type):
+    return 'Checkout' if attendance_type == 'checkout' else 'Checkin'
+
+
+def _erp_attendance_code(attendance_type, attendance_code=None):
+    provided = str(attendance_code or '').strip().upper()
+    if provided:
+        return provided
+    return 'OUT' if attendance_type == 'checkout' else 'IN'
+
+
+def _location_source(attendance_type, has_request_location):
+    suffix = 'request' if has_request_location else 'runtime'
+    return f'{attendance_type}_{suffix}'
+
+
+def _apply_attendance_action(user, attendance_type='checkin', request_location=None, attendance_code=None):
+    attendance_type = _normalize_attendance_type(attendance_type)
+    today_val = date.today()
+    current_time = datetime.now()
+
+    if attendance_type == 'checkout':
+        active_attendance = Attendance.query.filter_by(
+            user_id=user.id,
+            date=today_val,
+        ).filter(Attendance.check_out_time.is_(None)).order_by(Attendance.check_in_time.desc()).first()
+
+        if not active_attendance:
+            return {
+                'ok': False,
+                'status_code': 400,
+                'message': f'Nhân viên {user.name} chưa Checkin nên không thể Checkout',
+            }
+
+        active_attendance.check_out_time = current_time
+        db.session.commit()
+
+        effective_location = request_location or get_runtime_location()
+        if effective_location:
+            try:
+                save_attendance_location(
+                    active_attendance.id,
+                    effective_location,
+                    source=_location_source('checkout', bool(request_location)),
+                )
+            except Exception as loc_exc:
+                db.session.rollback()
+                print(f"checkout location save error: {loc_exc}")
+
+        erp_success = erp_attendance.create_attendance_record(
+            employee_id=user.employee_id,
+            attendance_time=current_time,
+            attendance_code=_erp_attendance_code('checkout', attendance_code),
+        )
+
+        message = f'Checkout thành công cho {user.name}'
+        if not erp_success:
+            message += ' (lỗi ghi ERP)'
+
+        return {
+            'ok': True,
+            'status_code': 200,
+            'message': message,
+            'attendance': active_attendance,
+            'location': effective_location,
+            'location_text': location_to_text(effective_location) if effective_location else '',
+            'attendance_type': 'checkout',
+        }
+
+    active_attendance = Attendance.query.filter_by(
+        user_id=user.id,
+        date=today_val,
+    ).filter(Attendance.check_out_time.is_(None)).order_by(Attendance.check_in_time.desc()).first()
+
+    if active_attendance:
+        return {
+            'ok': False,
+            'status_code': 400,
+            'message': f'Nhân viên {user.name} đã Checkin và chưa Checkout',
+        }
+
+    last_attendance = Attendance.query.filter_by(
+        user_id=user.id,
+        date=today_val,
+    ).order_by(Attendance.check_in_time.desc()).first()
+    if last_attendance:
+        last_time = last_attendance.check_out_time or last_attendance.check_in_time
+        if (current_time - last_time).total_seconds() < 600:
+            return {
+                'ok': False,
+                'status_code': 400,
+                'message': 'Chỉ được chấm công 1 lần mỗi 10 phút',
+            }
+
+    if erp_attendance.check_recent_attendance(user.employee_id, minutes=10):
+        return {
+            'ok': False,
+            'status_code': 400,
+            'message': 'Đã chấm công trong ERP gần đây',
+        }
+
+    status = 'present'
+    if current_time.hour > 8 or (current_time.hour == 8 and current_time.minute > 30):
+        status = 'late'
+
+    new_attendance = Attendance(
+        user_id=user.id,
+        check_in_time=current_time,
+        date=today_val,
+        status=status,
+    )
+    db.session.add(new_attendance)
+    db.session.commit()
+
+    effective_location = request_location or get_runtime_location()
+    if effective_location:
+        try:
+            save_attendance_location(
+                new_attendance.id,
+                effective_location,
+                source=_location_source('checkin', bool(request_location)),
+            )
+        except Exception as loc_exc:
+            db.session.rollback()
+            print(f"checkin location save error: {loc_exc}")
+
+    erp_success = erp_attendance.create_attendance_record(
+        employee_id=user.employee_id,
+        attendance_time=current_time,
+        attendance_code=_erp_attendance_code('checkin', attendance_code),
+    )
+
+    message = f'Checkin thành công cho {user.name}'
+    if not erp_success:
+        message += ' (lỗi ghi ERP)'
+
+    return {
+        'ok': True,
+        'status_code': 200,
+        'message': message,
+        'attendance': new_attendance,
+        'location': effective_location,
+        'location_text': location_to_text(effective_location) if effective_location else '',
+        'attendance_type': 'checkin',
+    }
 
 
 @attendance_bp.route('/api/check_attendance', methods=['POST'])
@@ -35,66 +190,56 @@ def check_attendance():
         data = request.get_json(silent=True) or {}
         user_id = data.get('user_id')
         request_location = parse_location_payload(data)
+        attendance_type = _normalize_attendance_type(data.get('attendance_type'))
         if not user_id:
-            return jsonify({'success': False, 'message': 'Không tìm thấy user_id'})
+            return jsonify({'success': False, 'message': 'Không tìm thấy user_id'}), 400
 
         user = User.query.get(user_id)
         if not user:
-            return jsonify({'success': False, 'message': 'Không tìm thấy nhân viên'})
+            return jsonify({'success': False, 'message': 'Không tìm thấy nhân viên'}), 404
 
-        today = date.today()
-        current_time = datetime.now()
-
-        last_attendance = Attendance.query.filter_by(
-            user_id=user_id, date=today
-        ).order_by(Attendance.check_in_time.desc()).first()
-        if last_attendance:
-            last_time = last_attendance.check_out_time or last_attendance.check_in_time
-            if (current_time - last_time).total_seconds() < 600:
-                return jsonify({'success': False, 'message': 'Chỉ được điểm danh 1 lần mỗi 10 phút'})
-
-        if erp_attendance.check_recent_attendance(user.employee_id, minutes=10):
-            return jsonify({'success': False, 'message': 'Đã chấm công trong ERP gần đây'})
-
-        status = 'present'
-        if current_time.hour > 8 or (current_time.hour == 8 and current_time.minute > 30):
-            status = 'late'
-
-        new_attendance = Attendance(
-            user_id=user_id, check_in_time=current_time,
-            date=today, status=status
+        action_result = _apply_attendance_action(
+            user=user,
+            attendance_type=attendance_type,
+            request_location=request_location,
         )
-        db.session.add(new_attendance)
-        db.session.commit()
+        if not action_result.get('ok'):
+            return jsonify({
+                'success': False,
+                'message': action_result.get('message') or 'Không thể chấm công',
+            }), int(action_result.get('status_code') or 400)
 
-        effective_location = request_location or get_runtime_location()
-        if effective_location:
-            try:
-                save_attendance_location(
-                    new_attendance.id,
-                    effective_location,
-                    source='request' if request_location else 'runtime',
-                )
-            except Exception as loc_exc:
-                db.session.rollback()
-                print(f"check_attendance location save error: {loc_exc}")
+        attendance_row = action_result.get('attendance')
+        if attendance_row is not None:
+            location_bundle = serialize_attendance_locations(attendance_row.id)
+            checkin_location_text = ((location_bundle or {}).get('checkin') or {}).get('text', '')
+            checkout_location_text = ((location_bundle or {}).get('checkout') or {}).get('text', '')
+        else:
+            checkin_location_text = ''
+            checkout_location_text = ''
 
-        erp_success = erp_attendance.create_attendance_record(
-            employee_id=user.employee_id,
-            attendance_time=current_time
-        )
-
-        msg = f'Điểm danh thành công cho {user.name}'
-        if not erp_success:
-            msg += ' (lỗi ghi ERP)'
         return jsonify({
             'success': True,
-            'message': msg,
-            'location': effective_location,
-            'location_text': location_to_text(effective_location) if effective_location else '',
+            'message': action_result.get('message') or 'Chấm công thành công',
+            'attendance_type': action_result.get('attendance_type') or attendance_type,
+            'attendance_type_label': _attendance_type_label(action_result.get('attendance_type') or attendance_type),
+            'location': action_result.get('location'),
+            'location_text': action_result.get('location_text') or '',
+            'check_in_time': (
+                attendance_row.check_in_time.strftime('%H:%M:%S')
+                if attendance_row and attendance_row.check_in_time
+                else ''
+            ),
+            'check_out_time': (
+                attendance_row.check_out_time.strftime('%H:%M:%S')
+                if attendance_row and attendance_row.check_out_time
+                else ''
+            ),
+            'check_in_location_text': checkin_location_text,
+            'check_out_location_text': checkout_location_text,
         })
     except Exception as e:
-        return jsonify({'success': False, 'message': str(e)})
+        return jsonify({'success': False, 'message': str(e)}), 500
 
 
 @attendance_bp.route('/api/attendance_image', methods=['POST'])
@@ -103,9 +248,11 @@ def attendance_image():
         attendance_code = None
         request_location = None
         include_preview = False
+        attendance_type = 'checkin'
         if 'image' in request.files:
             image_file = request.files['image']
             attendance_code = request.form.get('attendance_code')
+            attendance_type = _normalize_attendance_type(request.form.get('attendance_type'))
             include_preview_raw = request.form.get('include_preview', 'false')
             include_preview = str(include_preview_raw).strip().lower() in {'1', 'true', 'yes', 'on'}
             request_location = parse_location_payload({
@@ -130,6 +277,7 @@ def attendance_image():
                 return jsonify({'success': False, 'message': 'Thiếu ảnh'}), 400
             image_base64 = data['image_base64']
             attendance_code = data.get('attendance_code')
+            attendance_type = _normalize_attendance_type(data.get('attendance_type'))
             include_preview_raw = data.get('include_preview', False)
             if isinstance(include_preview_raw, str):
                 include_preview = include_preview_raw.strip().lower() in {'1', 'true', 'yes', 'on'}
@@ -230,47 +378,40 @@ def attendance_image():
                 'preview_image_base64': preview_image_base64,
             }), 400
 
-        today_val = date.today()
-        current_time = datetime.now()
-        status = 'present'
-        if current_time.hour > 8 or (current_time.hour == 8 and current_time.minute > 30):
-            status = 'late'
-
-        new_attendance = Attendance(
-            user_id=user_id, check_in_time=current_time,
-            date=today_val, status=status
+        action_result = _apply_attendance_action(
+            user=user,
+            attendance_type=attendance_type,
+            request_location=request_location,
+            attendance_code=attendance_code,
         )
-        db.session.add(new_attendance)
-        db.session.commit()
+        if not action_result.get('ok'):
+            return jsonify({
+                'success': False,
+                'message': action_result.get('message') or 'Không thể chấm công',
+                'detection_bbox': detection_bbox,
+                'face_count': len(results),
+                'preview_image_base64': preview_image_base64,
+            }), int(action_result.get('status_code') or 400)
 
-        effective_location = request_location or get_runtime_location()
-        if effective_location:
-            try:
-                save_attendance_location(
-                    new_attendance.id,
-                    effective_location,
-                    source='request' if request_location else 'runtime',
-                )
-            except Exception as loc_exc:
-                db.session.rollback()
-                print(f"attendance_image location save error: {loc_exc}")
-
-        erp_attendance.create_attendance_record(
-            employee_id=user.employee_id,
-            attendance_time=current_time,
-            attendance_code=attendance_code
-        )
+        attendance_row = action_result.get('attendance')
+        location_bundle = serialize_attendance_locations(attendance_row.id) if attendance_row else {}
 
         return jsonify({
             'success': True,
-            'message': f'Điểm danh thành công cho {user.name}',
+            'message': action_result.get('message') or f'Điểm danh thành công cho {user.name}',
             'user': {
                 'name': user.name, 'employee_id': user.employee_id,
                 'department': user.department, 'position': user.position
             },
-            'status': status,
-            'location': effective_location,
-            'location_text': location_to_text(effective_location) if effective_location else '',
+            'status': attendance_row.status if attendance_row else '',
+            'attendance_type': action_result.get('attendance_type') or attendance_type,
+            'attendance_type_label': _attendance_type_label(action_result.get('attendance_type') or attendance_type),
+            'check_in_time': attendance_row.check_in_time.strftime('%H:%M:%S') if attendance_row and attendance_row.check_in_time else '',
+            'check_out_time': attendance_row.check_out_time.strftime('%H:%M:%S') if attendance_row and attendance_row.check_out_time else '',
+            'location': action_result.get('location'),
+            'location_text': action_result.get('location_text') or '',
+            'check_in_location_text': ((location_bundle or {}).get('checkin') or {}).get('text', ''),
+            'check_out_location_text': ((location_bundle or {}).get('checkout') or {}).get('text', ''),
             'detection_bbox': detection_bbox,
             'face_count': len(results),
             'preview_image_base64': preview_image_base64,
@@ -522,15 +663,30 @@ def get_today_attendance():
         )
         data = []
         for att, user in records:
-            location_payload = serialize_attendance_location(att.id)
+            location_bundle = serialize_attendance_locations(att.id)
+            checkin_location_payload = (location_bundle or {}).get('checkin')
+            checkout_location_payload = (location_bundle or {}).get('checkout')
+            latest_location_payload = (location_bundle or {}).get('latest') or serialize_attendance_location(att.id)
+
+            if att.check_out_time:
+                status_text = 'Đã Checkout'
+            else:
+                status_text = 'Đúng giờ' if att.status == 'present' else ('Trễ' if att.status == 'late' else att.status)
+
             data.append({
                 'name': user.name,
                 'employee_id': user.employee_id,
                 'department': user.department,
                 'time': att.check_in_time.strftime('%H:%M:%S') if att.check_in_time else '',
-                'status': 'Đúng giờ' if att.status == 'present' else ('Trễ' if att.status == 'late' else att.status),
-                'location': location_payload,
-                'location_text': (location_payload or {}).get('text', ''),
+                'check_in_time': att.check_in_time.strftime('%H:%M:%S') if att.check_in_time else '',
+                'check_out_time': att.check_out_time.strftime('%H:%M:%S') if att.check_out_time else '',
+                'status': status_text,
+                'location': latest_location_payload,
+                'location_text': (latest_location_payload or {}).get('text', ''),
+                'check_in_location': checkin_location_payload,
+                'check_out_location': checkout_location_payload,
+                'check_in_location_text': (checkin_location_payload or {}).get('text', ''),
+                'check_out_location_text': (checkout_location_payload or {}).get('text', ''),
             })
         return jsonify({'success': True, 'data': data})
     except Exception as e:
@@ -554,13 +710,24 @@ def api_report():
     )
     res = []
     for att, user in records:
+        location_bundle = serialize_attendance_locations(att.id)
+        checkin_location_payload = (location_bundle or {}).get('checkin')
+        checkout_location_payload = (location_bundle or {}).get('checkout')
+
+        if att.check_out_time:
+            status_text = 'Đã Checkout'
+        else:
+            status_text = 'Đúng giờ' if att.status == 'present' else ('Trễ' if att.status == 'late' else att.status)
+
         res.append({
             'name': user.name,
             'employee_id': user.employee_id,
             'department': user.department,
             'check_in_time': att.check_in_time.strftime('%H:%M:%S') if att.check_in_time else '',
             'check_out_time': att.check_out_time.strftime('%H:%M:%S') if att.check_out_time else '',
-            'status': 'Đúng giờ' if att.status == 'present' else ('Trễ' if att.status == 'late' else att.status)
+            'check_in_location': (checkin_location_payload or {}).get('text', ''),
+            'check_out_location': (checkout_location_payload or {}).get('text', ''),
+            'status': status_text,
         })
     return jsonify({'success': True, 'records': res})
 
@@ -603,19 +770,28 @@ def api_report_push_to_erp():
 
     pushed = 0
     failed_ids = []
+    total_events = 0
     for att, user in records:
-        attendance_time = att.check_in_time or datetime.combine(report_date, datetime.min.time())
-        ok = erp_attendance.create_attendance_record(
-            employee_id=user.employee_id,
-            attendance_time=attendance_time,
-        )
-        if ok:
-            pushed += 1
-        else:
-            failed_ids.append(user.employee_id)
+        events = []
+        checkin_time = att.check_in_time or datetime.combine(report_date, datetime.min.time())
+        events.append(('IN', checkin_time))
+        if att.check_out_time:
+            events.append(('OUT', att.check_out_time))
+
+        for event_code, event_time in events:
+            total_events += 1
+            ok = erp_attendance.create_attendance_record(
+                employee_id=user.employee_id,
+                attendance_time=event_time,
+                attendance_code=event_code,
+            )
+            if ok:
+                pushed += 1
+            else:
+                failed_ids.append(f"{user.employee_id}:{event_code}")
 
     failed = len(failed_ids)
-    total = len(records)
+    total = total_events
 
     message = f'Đã đẩy {pushed}/{total} bản ghi lên ERP.'
     if failed:

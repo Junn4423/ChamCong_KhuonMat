@@ -4,10 +4,10 @@
 import { request } from '../request'
 
 export const attendanceApi = {
-  checkAttendance: (userId, location = null) => request('/api/check_attendance', {
+  checkAttendance: (userId, location = null, attendanceType = 'checkin') => request('/api/check_attendance', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ user_id: userId, location }),
+    body: JSON.stringify({ user_id: userId, location, attendance_type: attendanceType }),
   }),
 
   attendanceImage: (formData) => request('/api/attendance_image', {
