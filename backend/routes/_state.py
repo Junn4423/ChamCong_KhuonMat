@@ -18,6 +18,8 @@ class _AppState:
     camera_runtime_state = None     # dict
     load_known_faces = None         # callable
     ADMIN_PASSWORD = 'admin123'
+    INTERNAL_ADMIN_USERNAME = 'admin'
+    INTERNAL_ADMIN_PASSWORD = '1'
     SESSION_TTL_SECONDS = 8 * 3600
 
 

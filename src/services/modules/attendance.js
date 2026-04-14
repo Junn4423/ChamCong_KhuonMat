@@ -21,6 +21,12 @@ export const attendanceApi = {
     body: JSON.stringify(data),
   }),
 
+  attendanceDetectFrame: (data) => request('/api/attendance_detect', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  }),
+
   getStats: () => request('/api/get_attendance_stats'),
 
   getSystemStorageStats: () => request('/api/system_storage_stats'),
@@ -30,4 +36,10 @@ export const attendanceApi = {
   getTodayAttendance: () => request('/api/get_today_attendance'),
 
   getReport: (date) => request(`/api/report?date=${date}`),
+
+  pushReportToErp: (date) => request('/api/report/push_to_erp', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ date }),
+  }),
 }

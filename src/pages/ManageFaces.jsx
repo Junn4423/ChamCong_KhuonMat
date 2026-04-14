@@ -4,13 +4,36 @@ import { Image as ImageIcon, X, Loader2, RotateCw } from 'lucide-react'
 import { api } from '../services/api'
 import { useToast } from '../components/Toast'
 
-function ImagePreviewModal({ viewer, onClose, onPush }) {
+function getManageStatusBadge(employee) {
+  const statusCode = (employee?.status_code || '').toLowerCase()
+
+  if (statusCode === 'ready' || employee?.has_face) {
+    return {
+      label: employee?.status_text || 'Đã đăng ký khuôn mặt',
+      tone: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+    }
+  }
+
+  if (statusCode === 'image_only' || employee?.has_local_image) {
+    return {
+      label: employee?.status_text || 'Đã cập nhật ảnh, chưa trích xuất khuôn mặt',
+      tone: 'bg-sky-50 text-sky-700 border-sky-200',
+    }
+  }
+
+  return {
+    label: employee?.status_text || 'Đã có trong hệ thống (chưa có khuôn mặt)',
+    tone: 'bg-amber-50 text-amber-700 border-amber-200',
+  }
+}
+
+function ImagePreviewModal({ viewer, onClose, onPush, isInternalMode }) {
   if (!viewer.open) return null
 
   return (
     <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-4">
-      <div className="w-full max-w-3xl bg-white rounded-2xl shadow-2xl overflow-hidden">
-        <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between gap-3">
+      <div className="w-full max-w-4xl bg-white rounded-2xl shadow-2xl overflow-hidden">
+        <div className="px-4 sm:px-6 py-4 border-b border-slate-100 flex items-center justify-between gap-3">
           <div>
             <h2 className="text-lg font-semibold text-slate-800">Ảnh nhân viên</h2>
             <p className="text-sm text-slate-500">
@@ -26,7 +49,7 @@ function ImagePreviewModal({ viewer, onClose, onPush }) {
         </div>
 
         <div className="grid lg:grid-cols-[360px_1fr] gap-0">
-          <div className="bg-slate-50 border-r border-slate-100 min-h-[360px] flex items-center justify-center p-6">
+          <div className="bg-slate-50 border-r border-slate-100 min-h-[220px] sm:min-h-[360px] flex items-center justify-center p-4 sm:p-6">
             {viewer.loading ? (
               <div className="flex flex-col items-center gap-2">
                 <Loader2 className="w-6 h-6 animate-spin text-primary-500" />
@@ -39,7 +62,7 @@ function ImagePreviewModal({ viewer, onClose, onPush }) {
               </div>
             ) : (
               <img
-                src={viewer.imageBase64}
+                src={viewer.imageUrl || viewer.imageBase64}
                 alt={viewer.employee?.name || 'Employee'}
                 className="max-h-[420px] w-full object-contain rounded-xl border border-slate-200 bg-white"
                 onError={e => { e.target.style.display = 'none' }}
@@ -47,7 +70,7 @@ function ImagePreviewModal({ viewer, onClose, onPush }) {
             )}
           </div>
 
-          <div className="p-6 space-y-5">
+          <div className="p-4 sm:p-6 space-y-5">
             <div className="grid sm:grid-cols-2 gap-4 text-sm">
               <div>
                 <p className="text-slate-400 mb-1 text-xs uppercase tracking-wider">Họ tên</p>
@@ -77,17 +100,17 @@ function ImagePreviewModal({ viewer, onClose, onPush }) {
               </div>
             </div>
 
-            <div className="flex gap-2 flex-wrap">
+            <div className="grid sm:flex gap-2">
               <button
                 onClick={() => onPush(viewer.employee)}
-                disabled={viewer.loading}
-                className="px-4 py-2 bg-emerald-600 text-white rounded-xl text-sm font-medium hover:bg-emerald-700 disabled:opacity-50 transition-colors"
+                disabled={viewer.loading || isInternalMode}
+                className="w-full sm:w-auto px-4 py-2 bg-emerald-600 text-white rounded-xl text-sm font-medium hover:bg-emerald-700 disabled:opacity-50 transition-colors"
               >
                 Đẩy ERP
               </button>
               <button
                 onClick={onClose}
-                className="px-4 py-2 bg-slate-100 text-slate-600 rounded-xl text-sm font-medium hover:bg-slate-200 transition-colors"
+                className="w-full sm:w-auto px-4 py-2 bg-slate-100 text-slate-600 rounded-xl text-sm font-medium hover:bg-slate-200 transition-colors"
               >
                 Đóng
               </button>
@@ -103,6 +126,7 @@ const emptyViewer = {
   open: false,
   loading: false,
   employee: null,
+  imageUrl: null,
   imageBase64: null,
   imageSource: 'local',
   error: '',
@@ -111,6 +135,7 @@ const emptyViewer = {
 export default function ManageFaces() {
   const navigate = useNavigate()
   const { toast } = useToast()
+  const [authMode, setAuthMode] = useState('system')
   const [employees, setEmployees] = useState([])
   const [loading, setLoading] = useState(true)
   const [bulkDeleting, setBulkDeleting] = useState(false)
@@ -126,6 +151,7 @@ export default function ManageFaces() {
 
   useEffect(() => {
     loadEmployees()
+    loadAuthMode()
   }, [])
 
   const filteredEmployees = useMemo(() => {
@@ -177,6 +203,7 @@ export default function ManageFaces() {
   const someOnPageSelected = selectedOnPageCount > 0 && !allOnPageSelected
 
   const totalPages = Math.ceil(filteredEmployees.length / pageSize)
+  const isInternalMode = authMode === 'internal'
 
   useEffect(() => {
     const visibleEmployeeIds = new Set(filteredEmployees.map(employee => employee.id))
@@ -202,6 +229,16 @@ export default function ManageFaces() {
       toast.error('Không thể kết nối backend')
     }
     setLoading(false)
+  }
+
+  async function loadAuthMode() {
+    try {
+      const res = await api.sessionStatus()
+      const mode = (res?.auth_mode || res?.user?.auth_mode || 'system').toLowerCase()
+      setAuthMode(mode === 'internal' ? 'internal' : 'system')
+    } catch {
+      setAuthMode('system')
+    }
   }
 
   function closeViewer() {
@@ -233,6 +270,7 @@ export default function ManageFaces() {
       open: true,
       loading: true,
       employee,
+      imageUrl: null,
       imageBase64: null,
       imageSource: 'local',
       error: '',
@@ -248,6 +286,7 @@ export default function ManageFaces() {
             ...employee,
             ...(res.employee || {}),
           },
+          imageUrl: res.image_url || null,
           imageBase64: res.image_base64,
           imageSource: res.image_source || 'local',
           error: '',
@@ -257,6 +296,7 @@ export default function ManageFaces() {
           open: true,
           loading: false,
           employee,
+          imageUrl: null,
           imageBase64: null,
           imageSource: 'local',
           error: res.message || 'Không tải được ảnh hiện có',
@@ -267,6 +307,7 @@ export default function ManageFaces() {
         open: true,
         loading: false,
         employee,
+        imageUrl: null,
         imageBase64: null,
         imageSource: 'local',
         error: 'Không thể tải ảnh hiện có từ backend',
@@ -349,6 +390,11 @@ export default function ManageFaces() {
   async function handlePushToErp(employee) {
     if (!employee) return
 
+    if (isInternalMode) {
+      toast.error('Đang ở chế độ nội bộ')
+      return
+    }
+
     if (!window.confirm(`Đẩy ảnh nhân viên ${employee.name} (${employee.employee_id}) lên ERP?`)) return
 
     try {
@@ -404,30 +450,36 @@ export default function ManageFaces() {
   ]
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4 md:space-y-6">
       <ImagePreviewModal
         viewer={viewer}
         onClose={closeViewer}
         onPush={handlePushToErp}
+        isInternalMode={isInternalMode}
       />
 
       <div className="flex items-center justify-between gap-3 flex-wrap">
-        <h1 className="text-2xl font-bold text-slate-800 tracking-tight">Quản lý nhân viên</h1>
+        <div>
+          <h1 className="text-2xl font-bold text-slate-800 tracking-tight">Quản lý nhân viên</h1>
+          {isInternalMode && (
+            <p className="text-sm text-amber-700 mt-1">Đang ở chế độ nội bộ. Nút đẩy ERP đã bị khóa.</p>
+          )}
+        </div>
         <button
           onClick={loadEmployees}
-          className="flex items-center gap-2 px-4 py-2 bg-white text-slate-600 rounded-xl text-sm font-medium hover:bg-slate-100 border border-slate-200 transition-colors"
+          className="w-full sm:w-auto flex items-center justify-center gap-2 px-4 py-2 bg-white text-slate-600 rounded-xl text-sm font-medium hover:bg-slate-100 border border-slate-200 transition-colors"
         >
           <RotateCw size={16} />
           Làm mới
         </button>
       </div>
 
-      <div className="flex gap-2 flex-wrap">
+      <div className="grid grid-cols-2 sm:flex gap-2">
         {filterButtons.map(btn => (
           <button
             key={btn.key}
             onClick={() => setFaceFilter(btn.key)}
-            className={`px-4 py-2 rounded-xl text-sm font-medium transition-all ${
+            className={`px-4 py-2 rounded-xl text-sm font-medium transition-all text-center ${
               faceFilter === btn.key
                 ? 'bg-primary-600 text-white shadow-sm'
                 : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
@@ -447,7 +499,7 @@ export default function ManageFaces() {
       />
 
       {selectedEmployeeIds.length > 0 && (
-        <div className="flex items-center justify-between gap-3 flex-wrap bg-red-50 border border-red-200 rounded-xl px-4 py-3">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 bg-red-50 border border-red-200 rounded-xl px-4 py-3">
           <p className="text-sm text-red-700 font-medium">
             Đã chọn {selectedEmployeeIds.length} nhân viên
           </p>
@@ -477,8 +529,8 @@ export default function ManageFaces() {
         </div>
       ) : (
         <div className="bg-white rounded-2xl shadow-sm border border-slate-200/60 overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+          <div className="hidden lg:block overflow-x-auto">
+            <table className="w-full text-sm min-w-[980px]">
               <thead className="bg-slate-50">
                 <tr>
                   <th className="px-4 py-3 text-left">
@@ -518,13 +570,14 @@ export default function ManageFaces() {
                     <td className="px-4 py-3 text-slate-600 font-mono text-xs">{employee.employee_id}</td>
                     <td className="px-4 py-3 text-slate-500">{employee.department || '-'}</td>
                     <td className="px-4 py-3 text-center">
-                      <span className={`inline-block px-2.5 py-1 rounded-lg text-xs font-medium border ${
-                        employee.has_face
-                          ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                          : 'bg-amber-50 text-amber-700 border-amber-200'
-                      }`}>
-                        {employee.has_face ? 'Có khuôn mặt' : 'Chưa có'}
-                      </span>
+                      {(() => {
+                        const badge = getManageStatusBadge(employee)
+                        return (
+                          <span className={`inline-block px-2.5 py-1 rounded-lg text-xs font-medium border ${badge.tone}`}>
+                            {badge.label}
+                          </span>
+                        )
+                      })()}
                     </td>
                     <td className="px-4 py-3 text-center">
                       {employee.has_local_image ? (
@@ -556,7 +609,8 @@ export default function ManageFaces() {
                         </button>
                         <button
                           onClick={() => handlePushToErp(employee)}
-                          className="px-2.5 py-1.5 bg-emerald-50 text-emerald-700 rounded-lg text-xs hover:bg-emerald-100 border border-emerald-200 transition-colors"
+                          disabled={isInternalMode}
+                          className="px-2.5 py-1.5 bg-emerald-50 text-emerald-700 rounded-lg text-xs hover:bg-emerald-100 border border-emerald-200 transition-colors disabled:opacity-50"
                         >
                           Đẩy ERP
                         </button>
@@ -579,60 +633,160 @@ export default function ManageFaces() {
               </tbody>
             </table>
           </div>
-          
-          <div className="px-5 py-4 border-t border-slate-100 flex items-center justify-between flex-wrap gap-4">
-            <div className="flex items-center gap-2">
-              <span className="text-sm text-slate-500">Hiển thị</span>
-              <select
-                value={pageSize}
-                onChange={e => setPageSize(Number(e.target.value))}
-                className="border border-slate-200 rounded-lg px-2 py-1 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
-              >
-                <option value={5}>5</option>
-                <option value={10}>10</option>
-                <option value={20}>20</option>
-                <option value={50}>50</option>
-                <option value={100}>100</option>
-              </select>
-              <span className="text-sm text-slate-500">trên tổng {filteredEmployees.length}</span>
-            </div>
-            
-            {totalPages > 1 && (
-              <div className="flex gap-1">
-                <button
-                  onClick={() => setPage(p => Math.max(1, p - 1))}
-                  disabled={page === 1}
-                  className="px-3 py-1 rounded-lg border border-slate-200 text-sm font-medium hover:bg-slate-50 disabled:opacity-50 text-slate-600"
-                >
-                  Trước
-                </button>
-                {Array.from({ length: totalPages }, (_, i) => i + 1)
-                  .filter(p => p === 1 || p === totalPages || Math.abs(p - page) <= 1)
-                  .map((p, i, arr) => (
-                    <React.Fragment key={p}>
-                      {i > 0 && arr[i - 1] !== p - 1 && <span className="px-2 py-1 text-slate-400">...</span>}
-                      <button
-                        onClick={() => setPage(p)}
-                        className={`px-3 py-1 rounded-lg text-sm font-medium transition-colors ${
-                          page === p
-                            ? 'bg-primary-600 text-white'
-                            : 'border border-slate-200 text-slate-600 hover:bg-slate-50'
-                        }`}
-                      >
-                        {p}
-                      </button>
-                    </React.Fragment>
-                  ))}
-                <button
-                  onClick={() => setPage(p => Math.min(totalPages, p + 1))}
-                  disabled={page === totalPages}
-                  className="px-3 py-1 rounded-lg border border-slate-200 text-sm font-medium hover:bg-slate-50 disabled:opacity-50 text-slate-600"
-                >
-                  Sau
-                </button>
+
+          <div className="lg:hidden">
+            {paginatedEmployees.length > 0 && (
+              <div className="px-4 py-3 border-b border-slate-100 bg-slate-50 flex items-center justify-between gap-3">
+                <label className="inline-flex items-center gap-2 text-xs text-slate-600 font-medium">
+                  <input
+                    type="checkbox"
+                    checked={allOnPageSelected}
+                    onChange={e => toggleSelectAllOnPage(e.target.checked)}
+                    disabled={paginatedEmployees.length === 0 || bulkDeleting}
+                    className="w-4 h-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500/30 disabled:opacity-60"
+                  />
+                  Chọn tất cả trang
+                </label>
+                <span className="text-xs text-slate-500">{paginatedEmployees.length} nhân viên</span>
               </div>
             )}
+
+            <div className="divide-y divide-slate-100">
+              {paginatedEmployees.map(employee => {
+                const badge = getManageStatusBadge(employee)
+                return (
+                  <div key={employee.id} className="p-3 sm:p-4 space-y-3">
+                    <div className="flex items-start gap-3">
+                      <input
+                        type="checkbox"
+                        checked={selectedEmployeeIds.includes(employee.id)}
+                        onChange={() => toggleEmployeeSelection(employee.id)}
+                        disabled={bulkDeleting}
+                        className="mt-1 w-4 h-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500/30 disabled:opacity-60"
+                      />
+
+                      <div className="min-w-0 flex-1">
+                        <p className="font-semibold text-slate-800 truncate">{employee.name}</p>
+                        <p className="text-xs text-slate-500 mt-0.5 font-mono">{employee.employee_id}</p>
+                        <p className="text-xs text-slate-500 mt-0.5 truncate">{employee.department || '-'}</p>
+                        <p className="text-[11px] text-slate-400 mt-1">{employee.created_at}</p>
+                      </div>
+
+                      <span className={`shrink-0 inline-block px-2.5 py-1 rounded-lg text-[11px] font-medium border ${badge.tone}`}>
+                        {badge.label}
+                      </span>
+                    </div>
+
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs text-slate-500">Ảnh nhân viên</span>
+                      {employee.has_local_image ? (
+                        <button
+                          onClick={() => handleViewImage(employee)}
+                          className="px-3 py-1.5 bg-blue-50 text-blue-700 rounded-lg text-xs font-medium hover:bg-blue-100 transition-colors border border-blue-200"
+                        >
+                          Xem ảnh
+                        </button>
+                      ) : (
+                        <span className="text-xs text-slate-400">Chưa có ảnh</span>
+                      )}
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2">
+                      {!employee.has_face && (
+                        <button
+                          onClick={() => handleRegisterFace(employee)}
+                          className="px-2.5 py-1.5 bg-primary-50 text-primary-700 rounded-lg text-xs hover:bg-primary-100 border border-primary-200 transition-colors"
+                        >
+                          Đăng ký
+                        </button>
+                      )}
+                      <button
+                        onClick={() => handleUpdateFace(employee.id)}
+                        className="px-2.5 py-1.5 bg-blue-50 text-blue-700 rounded-lg text-xs hover:bg-blue-100 border border-blue-200 transition-colors"
+                      >
+                        Cập nhật
+                      </button>
+                      <button
+                        onClick={() => handlePushToErp(employee)}
+                        disabled={isInternalMode}
+                        className="px-2.5 py-1.5 bg-emerald-50 text-emerald-700 rounded-lg text-xs hover:bg-emerald-100 border border-emerald-200 transition-colors disabled:opacity-50"
+                      >
+                        Đẩy ERP
+                      </button>
+                      <button
+                        onClick={() => handleClearFace(employee.id, employee.name)}
+                        className="px-2.5 py-1.5 bg-amber-50 text-amber-700 rounded-lg text-xs hover:bg-amber-100 border border-amber-200 transition-colors"
+                      >
+                        Xóa ảnh
+                      </button>
+                      <button
+                        onClick={() => handleDelete(employee.id, employee.name)}
+                        className="col-span-2 px-2.5 py-1.5 bg-red-50 text-red-600 rounded-lg text-xs hover:bg-red-100 border border-red-200 transition-colors"
+                      >
+                        Xóa nhân viên
+                      </button>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
           </div>
+          
+          {filteredEmployees.length > 0 && (
+            <div className="px-4 sm:px-5 py-4 border-t border-slate-100 flex items-center justify-between flex-wrap gap-4">
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-slate-500">Hiển thị</span>
+                <select
+                  value={pageSize}
+                  onChange={e => setPageSize(Number(e.target.value))}
+                  className="border border-slate-200 rounded-lg px-2 py-1 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
+                >
+                  <option value={5}>5</option>
+                  <option value={10}>10</option>
+                  <option value={20}>20</option>
+                  <option value={50}>50</option>
+                  <option value={100}>100</option>
+                </select>
+                <span className="text-sm text-slate-500">trên tổng {filteredEmployees.length}</span>
+              </div>
+
+              {totalPages > 1 && (
+                <div className="flex gap-1">
+                  <button
+                    onClick={() => setPage(p => Math.max(1, p - 1))}
+                    disabled={page === 1}
+                    className="px-3 py-1 rounded-lg border border-slate-200 text-sm font-medium hover:bg-slate-50 disabled:opacity-50 text-slate-600"
+                  >
+                    Trước
+                  </button>
+                  {Array.from({ length: totalPages }, (_, i) => i + 1)
+                    .filter(p => p === 1 || p === totalPages || Math.abs(p - page) <= 1)
+                    .map((p, i, arr) => (
+                      <React.Fragment key={p}>
+                        {i > 0 && arr[i - 1] !== p - 1 && <span className="px-2 py-1 text-slate-400">...</span>}
+                        <button
+                          onClick={() => setPage(p)}
+                          className={`px-3 py-1 rounded-lg text-sm font-medium transition-colors ${
+                            page === p
+                              ? 'bg-primary-600 text-white'
+                              : 'border border-slate-200 text-slate-600 hover:bg-slate-50'
+                          }`}
+                        >
+                          {p}
+                        </button>
+                      </React.Fragment>
+                    ))}
+                  <button
+                    onClick={() => setPage(p => Math.min(totalPages, p + 1))}
+                    disabled={page === totalPages}
+                    className="px-3 py-1 rounded-lg border border-slate-200 text-sm font-medium hover:bg-slate-50 disabled:opacity-50 text-slate-600"
+                  >
+                    Sau
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
 
           {filteredEmployees.length === 0 && (
             <div className="px-5 py-8 text-center text-slate-400 text-sm">

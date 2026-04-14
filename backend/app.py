@@ -26,7 +26,7 @@ import time
 
 from backend.config import CAMERA_CONFIG
 from backend.face_encoding_utils import face_encoding_count, normalize_face_encodings
-from backend.models.database import db, User, Attendance
+from backend.models.database import db, User, Attendance, ensure_database_schema
 from backend.models.erp_integration import erp_attendance
 from backend.runtime import ensure_data_dir, ensure_db_path, sqlite_database_uri
 from backend.services.attendance_service import AttendanceService
@@ -100,7 +100,7 @@ def create_app():
     try:
         if FaceRecognition is None:
             raise RuntimeError(f"FaceRecognition import failed: {_FACE_IMPORT_ERROR or 'unknown'}")
-        face_recognizer = FaceRecognition(det_thresh=0.5)
+        face_recognizer = FaceRecognition(det_thresh=0.35)
     except Exception as exc:
         print(f'FaceRecognition init failed, fallback to API-safe mode: {exc}')
         face_recognizer = _FallbackFaceRecognizer()
@@ -125,7 +125,13 @@ def create_app():
         'location_enabled': False,
         'updated_at': None,
     }
-    state.ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD', 'admin123')
+    state.INTERNAL_ADMIN_USERNAME = os.environ.get('INTERNAL_ADMIN_USERNAME', 'admin')
+    state.INTERNAL_ADMIN_PASSWORD = os.environ.get(
+        'INTERNAL_ADMIN_PASSWORD',
+        os.environ.get('ADMIN_PASSWORD', '1'),
+    )
+    # Keep legacy field for compatibility with older code paths.
+    state.ADMIN_PASSWORD = state.INTERNAL_ADMIN_PASSWORD
     state.SESSION_TTL_SECONDS = int(os.environ.get('SESSION_TTL_SECONDS', 8 * 3600))
 
     # ── Core functions shared with both routes and background tasks ──────
@@ -217,6 +223,7 @@ def create_app():
 
     with app.app_context():
         db.create_all()
+        ensure_database_schema()
         load_known_faces()
         attendance_service_ref[0] = AttendanceService(
             app, face_recognizer, perform_auto_attendance

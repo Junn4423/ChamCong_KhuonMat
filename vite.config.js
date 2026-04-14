@@ -12,9 +12,23 @@ export default defineConfig({
   },
   server: {
     port: 5173,
+    allowedHosts: [
+      'localhost',
+      '127.0.0.1',
+      '.trycloudflare.com',
+      '.ngrok-free.dev',
+      '.ngrok.app',
+      '.ngrok.io',
+    ],
     proxy: {
-      '/api': 'http://127.0.0.1:5000',
-      '/video_feed': 'http://127.0.0.1:5000',
+      '/api': {
+        target: 'http://127.0.0.1:5000',
+        changeOrigin: true,
+      },
+      '/video_feed': {
+        target: 'http://127.0.0.1:5000',
+        changeOrigin: true,
+      },
     }
   },
   resolve: {

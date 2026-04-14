@@ -1,6 +1,6 @@
 import { NavLink, Navigate, Outlet, useLocation } from 'react-router-dom'
 import { useEffect, useState } from 'react'
-import { api, clearSessionToken } from '../services/api'
+import { api, clearSessionToken, SESSION_EXPIRED_EVENT } from '../services/api'
 import { Home, Camera, UserPlus, Video, Settings, BarChart } from 'lucide-react'
 
 const navItems = [
@@ -16,7 +16,9 @@ export default function Layout() {
   const [apiStatus, setApiStatus] = useState('checking')
   const [sidebarOpen, setSidebarOpen] = useState(() => {
     const saved = localStorage.getItem('sidebarOpen')
-    return saved !== null ? saved === 'true' : true
+    if (saved !== null) return saved === 'true'
+    if (typeof window !== 'undefined') return window.innerWidth >= 1024
+    return true
   })
   const [authState, setAuthState] = useState({
     loading: true,
@@ -28,8 +30,21 @@ export default function Layout() {
   useEffect(() => {
     checkSession()
     checkApi()
-    const interval = setInterval(checkApi, 10000)
-    return () => clearInterval(interval)
+    const apiInterval = setInterval(checkApi, 10000)
+    const sessionInterval = setInterval(checkSession, 15000)
+    return () => {
+      clearInterval(apiInterval)
+      clearInterval(sessionInterval)
+    }
+  }, [])
+
+  useEffect(() => {
+    function handleSessionExpired() {
+      setAuthState({ loading: false, authenticated: false, user: null })
+    }
+
+    window.addEventListener(SESSION_EXPIRED_EVENT, handleSessionExpired)
+    return () => window.removeEventListener(SESSION_EXPIRED_EVENT, handleSessionExpired)
   }, [])
 
   useEffect(() => {
@@ -110,17 +125,17 @@ export default function Layout() {
   }
 
   return (
-    <div className="relative min-h-screen bg-slate-50 overflow-x-hidden">
+    <div className="relative min-h-dvh bg-slate-50 overflow-x-hidden">
       {sidebarOpen && (
         <div
-          className="lg:hidden fixed inset-0 z-40 bg-slate-900/50 sidebar-overlay"
+          className="lg:hidden fixed inset-0 z-40 bg-slate-900/50 sidebar-overlay backdrop-blur-[1px]"
           onClick={() => setSidebarOpen(false)}
         />
       )}
 
       <aside className={`
         fixed top-0 left-0 z-50 h-screen
-        w-[260px] bg-white border-r border-slate-200
+        w-[84vw] max-w-[300px] sm:w-[260px] bg-white border-r border-slate-200
         flex flex-col transition-transform duration-300 ease-in-out
         ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}
       `}>
@@ -180,11 +195,11 @@ export default function Layout() {
         </div>
       </aside>
 
-      <div className={`min-h-screen min-w-0 flex flex-col transition-[margin] duration-300 ${
+      <div className={`min-h-dvh min-w-0 flex flex-col transition-[margin] duration-300 ${
         sidebarOpen ? 'lg:ml-[260px]' : 'lg:ml-0'
       }`}>
-        <header className="sticky top-0 z-30 bg-white/80 backdrop-blur-md border-b border-slate-200/60 px-4 lg:px-6">
-          <div className="flex items-center h-14 gap-4">
+        <header className="sticky top-0 z-30 bg-white/80 backdrop-blur-md border-b border-slate-200/60 px-3 sm:px-4 lg:px-6">
+          <div className="flex items-center h-12 sm:h-14 gap-3 sm:gap-4">
             <button
               onClick={toggleSidebar}
               className="w-9 h-9 rounded-lg flex items-center justify-center hover:bg-slate-100 text-slate-600 transition-colors"
@@ -206,7 +221,7 @@ export default function Layout() {
           </div>
         </header>
 
-        <main className="flex-1 p-4 lg:p-6 page-content">
+        <main className="flex-1 p-3 sm:p-4 lg:p-6 page-content">
           <div className="w-full mx-auto">
             <Outlet />
           </div>

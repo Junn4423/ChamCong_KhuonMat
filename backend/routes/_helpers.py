@@ -6,15 +6,19 @@ Mirrors the helper closures that were previously inside create_app().
 """
 
 import os
+import io
 import base64
 import secrets
 import time
 from datetime import datetime
 from functools import wraps
+from urllib.parse import quote
 
-from flask import request, jsonify, session, g
+from PIL import Image, ImageOps
 
-from backend.models.database import db, AttendanceLocation
+from flask import request, jsonify, g
+
+from backend.models.database import db, AttendanceLocation, EmployeeImage
 from backend.services.erp_http_client import ERPServiceError, erp_http_client
 from backend.routes._state import state
 
@@ -27,6 +31,7 @@ def sanitize_employee_id(employee_id):
 
 
 def employee_image_paths(employee_id):
+    # Legacy disk paths kept for one-time migration/cleanup.
     safe_id = sanitize_employee_id(employee_id)
     if not safe_id:
         return []
@@ -38,38 +43,180 @@ def employee_image_paths(employee_id):
     ]
 
 
-def save_local_employee_image(employee_id, image_bytes, preferred_ext='.jpg'):
+def _normalize_image_blob(image_bytes, preferred_ext='.jpg'):
     if not image_bytes:
-        return None
+        return None, None
+
+    ext = (preferred_ext or '.jpg').strip().lower()
+    if ext not in ('.jpg', '.jpeg', '.png'):
+        ext = '.jpg'
+
+    try:
+        img = Image.open(io.BytesIO(image_bytes))
+        img = ImageOps.exif_transpose(img)
+
+        if ext in ('.jpg', '.jpeg') and img.mode not in ('RGB', 'L'):
+            img = img.convert('RGB')
+
+        if max(img.size) > 1280:
+            resampling = getattr(Image, 'Resampling', Image)
+            img.thumbnail((1280, 1280), resampling.LANCZOS)
+
+        out = io.BytesIO()
+        if ext == '.png':
+            if img.mode not in ('RGB', 'RGBA', 'L'):
+                img = img.convert('RGBA')
+            img.save(out, format='PNG', optimize=True)
+            return out.getvalue(), 'image/png'
+
+        if img.mode != 'RGB':
+            img = img.convert('RGB')
+        img.save(out, format='JPEG', quality=80, optimize=True)
+        return out.getvalue(), 'image/jpeg'
+    except Exception:
+        header = image_bytes[:16]
+        if header.startswith(b'\x89PNG'):
+            return image_bytes, 'image/png'
+        return image_bytes, 'image/jpeg'
+
+
+def _generate_unique_image_token():
+    for _ in range(8):
+        token = secrets.token_urlsafe(24).replace('-', '').replace('_', '')
+        if not EmployeeImage.query.filter_by(image_token=token).first():
+            return token
+    return secrets.token_hex(24)
+
+
+def build_local_image_url(image_token):
+    token = (image_token or '').strip()
+    if not token:
+        return ''
+    return f"/api/image/token/{quote(token, safe='')}"
+
+
+def _get_local_image_row(employee_id):
     safe_id = sanitize_employee_id(employee_id)
     if not safe_id:
         return None
-    ext = preferred_ext if preferred_ext in ('.jpg', '.jpeg', '.png') else '.jpg'
-    output_path = os.path.join(state.app.config['UPLOAD_FOLDER'], f'{safe_id}{ext}')
-    with open(output_path, 'wb') as f:
-        f.write(image_bytes)
+    return EmployeeImage.query.filter_by(employee_id=safe_id).first()
 
-    for old_path in employee_image_paths(employee_id):
-        if old_path != output_path and os.path.exists(old_path):
+
+def _migrate_legacy_file_if_needed(employee_id):
+    safe_id = sanitize_employee_id(employee_id)
+    if not safe_id:
+        return None
+
+    row = EmployeeImage.query.filter_by(employee_id=safe_id).first()
+    if row and row.image_blob:
+        return row
+
+    for legacy_path in employee_image_paths(safe_id):
+        if not os.path.exists(legacy_path):
+            continue
+        try:
+            with open(legacy_path, 'rb') as f:
+                legacy_bytes = f.read()
+            _, ext = os.path.splitext(legacy_path)
+            save_local_employee_image(safe_id, legacy_bytes, preferred_ext=ext or '.jpg', source='legacy_file')
+            break
+        except OSError:
+            continue
+
+    for legacy_path in employee_image_paths(safe_id):
+        if os.path.exists(legacy_path):
             try:
-                os.remove(old_path)
+                os.remove(legacy_path)
             except OSError:
                 pass
-    return output_path
+
+    return EmployeeImage.query.filter_by(employee_id=safe_id).first()
+
+
+def save_local_employee_image(employee_id, image_bytes, preferred_ext='.jpg', source='local', erp_image_token=None):
+    if not image_bytes:
+        return None
+
+    safe_id = sanitize_employee_id(employee_id)
+    if not safe_id:
+        return None
+
+    normalized_bytes, mime_type = _normalize_image_blob(image_bytes, preferred_ext=preferred_ext)
+    if not normalized_bytes:
+        return None
+
+    row = EmployeeImage.query.filter_by(employee_id=safe_id).first()
+    if row is None:
+        row = EmployeeImage(employee_id=safe_id, image_token=_generate_unique_image_token())
+
+    row.image_blob = normalized_bytes
+    row.mime_type = mime_type or 'image/jpeg'
+    row.source = (source or 'local')[:32]
+    if erp_image_token is not None:
+        row.erp_image_token = (str(erp_image_token or '').strip() or None)
+    row.updated_at = datetime.utcnow()
+
+    db.session.add(row)
+    db.session.commit()
+    return row.image_token
+
+
+def get_employee_image_by_token(image_token):
+    token = (image_token or '').strip()
+    if not token:
+        return None
+    return EmployeeImage.query.filter_by(image_token=token).first()
 
 
 def get_local_employee_image(employee_id):
-    for image_path in employee_image_paths(employee_id):
-        if os.path.exists(image_path):
-            try:
-                with open(image_path, 'rb') as f:
-                    return f.read(), image_path
-            except OSError:
-                continue
+    row = _get_local_image_row(employee_id)
+    if row and row.image_blob:
+        return row.image_blob, (row.mime_type or 'image/jpeg')
+
+    row = _migrate_legacy_file_if_needed(employee_id)
+    if row and row.image_blob:
+        return row.image_blob, (row.mime_type or 'image/jpeg')
+
     return None, None
 
 
+def get_local_employee_image_token(employee_id):
+    row = _get_local_image_row(employee_id)
+    if row and row.image_token:
+        return row.image_token
+
+    row = _migrate_legacy_file_if_needed(employee_id)
+    if row and row.image_token:
+        return row.image_token
+
+    return ''
+
+
+def get_local_employee_erp_image_token(employee_id):
+    row = _get_local_image_row(employee_id)
+    if row and row.erp_image_token:
+        return row.erp_image_token
+
+    row = _migrate_legacy_file_if_needed(employee_id)
+    if row and row.erp_image_token:
+        return row.erp_image_token
+
+    return ''
+
+
+def get_local_employee_image_url(employee_id):
+    token = get_local_employee_image_token(employee_id)
+    if not token:
+        return ''
+    return build_local_image_url(token)
+
+
 def remove_local_employee_images(employee_id):
+    safe_id = sanitize_employee_id(employee_id)
+    if safe_id:
+        EmployeeImage.query.filter_by(employee_id=safe_id).delete()
+        db.session.commit()
+
     for image_path in employee_image_paths(employee_id):
         if os.path.exists(image_path):
             try:
@@ -82,12 +229,13 @@ def to_data_uri(image_bytes, image_path=None):
     if not image_bytes:
         return None
     mime = 'image/jpeg'
-    if image_path and image_path.lower().endswith('.png'):
+    path_hint = (image_path or '').lower() if isinstance(image_path, str) else ''
+    if path_hint.endswith('.png') or path_hint == 'image/png':
         mime = 'image/png'
     return f"data:{mime};base64,{base64.b64encode(image_bytes).decode('utf-8')}"
 
 
-def get_erp_employee_image_blob(employee_id, employee=None):
+def get_erp_employee_image_data(employee_id, employee=None):
     if not getattr(g, 'erp_auth', None):
         return None
     try:
@@ -96,11 +244,44 @@ def get_erp_employee_image_blob(employee_id, employee=None):
             employee_id,
             employee=employee,
         )
-        return image_data.get('bytes')
+        if isinstance(image_data, dict) and image_data.get('bytes'):
+            existing_row = _get_local_image_row(employee_id)
+            local_token = ''
+            latest_erp_token = str(image_data.get('image_token') or '').strip() or None
+
+            if existing_row and existing_row.image_blob and (existing_row.source or '') not in {'erp_cache'}:
+                if latest_erp_token and latest_erp_token != (existing_row.erp_image_token or '').strip():
+                    existing_row.erp_image_token = latest_erp_token
+                    db.session.add(existing_row)
+                    db.session.commit()
+                local_token = existing_row.image_token or ''
+            else:
+                local_token = save_local_employee_image(
+                    employee_id,
+                    image_data.get('bytes'),
+                    preferred_ext='.jpg',
+                    source='erp_cache',
+                    erp_image_token=latest_erp_token,
+                )
+
+            if local_token:
+                image_data = {
+                    **image_data,
+                    'local_image_token': local_token,
+                    'local_image_url': build_local_image_url(local_token),
+                }
+        return image_data
     except ERPServiceError:
         return None
     except Exception:
         return None
+
+
+def get_erp_employee_image_blob(employee_id, employee=None):
+    image_data = get_erp_employee_image_data(employee_id, employee=employee)
+    if not isinstance(image_data, dict):
+        return None
+    return image_data.get('bytes')
 
 
 # ─── Location helpers ────────────────────────────────────────────────────
@@ -226,6 +407,21 @@ def _build_session_user(auth_info):
         'department': auth_info.get('department', ''),
         'role': auth_info.get('role', ''),
         'userid': auth_info.get('userid', ''),
+        'domain': auth_info.get('domain', ''),
+        'method': auth_info.get('method', ''),
+        'database': auth_info.get('database', ''),
+        'IPv4': auth_info.get('IPv4', ''),
+        'lv006': auth_info.get('lv006', ''),
+        'lv900': auth_info.get('lv900', ''),
+        'lv705': auth_info.get('lv705', ''),
+        'lv667': auth_info.get('lv667', ''),
+        'lv040': auth_info.get('lv040', ''),
+        'device_type': auth_info.get('device_type', ''),
+        'type_code': auth_info.get('type_code', ''),
+        'quota_exceeded': bool(auth_info.get('quota_exceeded', False)),
+        'quota_message': auth_info.get('quota_message', ''),
+        'storage_info': auth_info.get('storage_info', {}),
+        'auth_mode': auth_info.get('auth_mode', 'system'),
     }
 
 
@@ -237,7 +433,25 @@ def _to_auth_object(payload):
     code = (payload.get('code') or '').strip()
     token = (payload.get('token') or '').strip()
     if code and token:
-        return {'code': code, 'token': token}
+        auth_obj = {'code': code, 'token': token}
+        for key in (
+            'database',
+            'IPv4',
+            'server_ip',
+            'role',
+            'domain',
+            'method',
+            'lv006',
+            'lv900',
+            'device_type',
+            'type_code',
+        ):
+            value = payload.get(key)
+            if isinstance(value, str):
+                value = value.strip()
+            if value not in (None, ''):
+                auth_obj[key] = value
+        return auth_obj
     return None
 
 
@@ -256,11 +470,56 @@ def issue_session(auth_info):
     auth_payload = {
         'code': (auth_info.get('code') or '').strip(),
         'token': (auth_info.get('token') or '').strip(),
+        'database': (auth_info.get('database') or '').strip(),
+        'IPv4': (auth_info.get('IPv4') or '').strip(),
+        'server_ip': (auth_info.get('IPv4') or '').strip(),
+        'role': (auth_info.get('role') or '').strip(),
+        'domain': (auth_info.get('domain') or '').strip(),
+        'method': (auth_info.get('method') or '').strip(),
+        'lv006': (auth_info.get('lv006') or '').strip(),
+        'lv900': (auth_info.get('lv900') or '').strip(),
+        'device_type': (auth_info.get('device_type') or '').strip(),
+        'type_code': (auth_info.get('type_code') or '').strip(),
     }
     user_payload = _build_session_user(auth_info)
     state.erp_sessions[token] = {
         'auth': auth_payload,
         'user': user_payload,
+        'mode': user_payload.get('auth_mode', 'system'),
+        'expires_at': time.time() + state.SESSION_TTL_SECONDS,
+    }
+    return token, user_payload
+
+
+def issue_internal_session(username=''):
+    user_code = (str(username or '').strip() or state.INTERNAL_ADMIN_USERNAME or 'admin')
+    user_payload = {
+        'code': user_code,
+        'name': 'Admin nội bộ',
+        'department': 'Nội bộ',
+        'role': 'internal_admin',
+        'userid': user_code,
+        'domain': '',
+        'method': '',
+        'database': '',
+        'IPv4': '',
+        'lv006': '',
+        'lv900': '',
+        'lv705': '',
+        'lv667': '',
+        'lv040': '',
+        'device_type': '',
+        'type_code': '',
+        'quota_exceeded': False,
+        'quota_message': '',
+        'storage_info': {},
+        'auth_mode': 'internal',
+    }
+
+    token = secrets.token_hex(32)
+    state.erp_sessions[token] = {
+        'user': user_payload,
+        'mode': 'internal',
         'expires_at': time.time() + state.SESSION_TTL_SECONDS,
     }
     return token, user_payload
@@ -291,21 +550,47 @@ def resolve_request_auth():
     return session_token, _to_auth_object(payload), _to_user_object(payload)
 
 
+def resolve_request_auth_mode(default='internal'):
+    user_obj = getattr(g, 'session_user', None)
+    if isinstance(user_obj, dict):
+        mode = (user_obj.get('auth_mode') or '').strip().lower()
+        if mode:
+            return mode
+
+    session_token = (
+        request.headers.get('X-Session-Token')
+        or request.headers.get('X-Admin-Token')
+    )
+    if session_token:
+        payload = _resolve_session_payload(session_token)
+        if isinstance(payload, dict):
+            mode = (payload.get('mode') or '').strip().lower()
+            if mode:
+                return mode
+
+    return default
+
+
 # ─── Decorators ──────────────────────────────────────────────────────────
 
 def admin_required(f):
     @wraps(f)
     def wrapper(*args, **kwargs):
         token, auth_obj, user_obj = resolve_request_auth()
-        if auth_obj:
+        if token:
             g.session_token = token
-            g.erp_auth = auth_obj
+        if user_obj:
             g.session_user = user_obj
+        if auth_obj:
+            g.erp_auth = auth_obj
             return f(*args, **kwargs)
 
-        admin_token = request.headers.get('X-Admin-Token')
-        if not (admin_token and admin_token in state.admin_tokens) and not session.get('is_admin'):
-            return jsonify({'success': False, 'message': 'Unauthorized'}), 401
+        admin_token = token or request.headers.get('X-Admin-Token')
+        if not (admin_token and admin_token in state.admin_tokens and user_obj):
+            return jsonify({
+                'success': False,
+                'message': 'Phiên đăng nhập đã hết hạn, vui lòng đăng nhập lại',
+            }), 401
         return f(*args, **kwargs)
     return wrapper
 
@@ -315,7 +600,10 @@ def session_required(f):
     def wrapper(*args, **kwargs):
         token, auth_obj, user_obj = resolve_request_auth()
         if not auth_obj:
-            return jsonify({'success': False, 'message': 'Unauthorized'}), 401
+            return jsonify({
+                'success': False,
+                'message': 'Phiên đăng nhập đã hết hạn, vui lòng đăng nhập lại',
+            }), 401
         g.session_token = token
         g.erp_auth = auth_obj
         g.session_user = user_obj

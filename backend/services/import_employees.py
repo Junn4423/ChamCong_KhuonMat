@@ -24,6 +24,7 @@ class ERPImporter:
             self.face_recognizer = None
         self.save_image_callback = save_image_callback
         self.imported_count = 0
+        self.updated_count = 0
         self.skipped_count = 0
         self.error_count = 0
         self.without_face_count = 0
@@ -49,13 +50,22 @@ class ERPImporter:
         except Exception as e:
             return None, f"Image processing error: {str(e)}"
 
-    def import_employee(self, auth, employee_data):
-        employee_id = employee_data['employee_id']
-        name = employee_data['name']
-        department = employee_data.get('department', '')
+    @staticmethod
+    def _normalized(value):
+        return str(value or '').strip()
+
+    def import_employee(self, auth, employee_data, overwrite_existing=False):
+        employee_id = self._normalized(employee_data.get('employee_id'))
+        name = self._normalized(employee_data.get('name'))
+        department = self._normalized(employee_data.get('department'))
+        position = self._normalized(employee_data.get('position'))
+
+        if not employee_id:
+            self.error_count += 1
+            return False
 
         existing = User.query.filter_by(employee_id=employee_id).first()
-        if existing:
+        if existing and not overwrite_existing:
             self.skipped_count += 1
             return False
 
@@ -76,40 +86,81 @@ class ERPImporter:
         else:
             self.without_face_count += 1
 
-        new_user = User(
-            name=name,
-            employee_id=employee_id,
-            department=department,
-            face_encoding=face_encoding_value,
-        )
-        db.session.add(new_user)
+        if existing:
+            existing.name = name or employee_id
+            existing.department = department
+            existing.position = position
+            if overwrite_existing:
+                # Overwrite mode replaces face data completely to mirror ERP source.
+                existing.face_encoding = face_encoding_value if face_encoding_value else []
+            elif face_encoding_value:
+                existing.face_encoding = face_encoding_value
+        else:
+            new_user = User(
+                name=name or employee_id,
+                employee_id=employee_id,
+                department=department,
+                position=position,
+                face_encoding=face_encoding_value,
+            )
+            db.session.add(new_user)
+
         db.session.commit()
         if self.save_image_callback and image_blob:
-            self.save_image_callback(employee_id, image_blob)
-        self.imported_count += 1
+            self.save_image_callback(employee_id, image_blob, employee_data)
+
+        if existing:
+            self.updated_count += 1
+        else:
+            self.imported_count += 1
         return True
 
-    def import_all_employees(self, auth):
+    def import_all_employees(self, auth, employee_ids=None, overwrite_existing=False):
         employees = self.get_employees_from_erp(auth)
+
+        requested_ids = []
+        if isinstance(employee_ids, (list, tuple, set)):
+            requested_ids = [self._normalized(item) for item in employee_ids if self._normalized(item)]
+
+        if requested_ids:
+            selected_upper = {emp_id.upper() for emp_id in requested_ids}
+            employees = [
+                emp for emp in employees
+                if self._normalized(emp.get('employee_id')).upper() in selected_upper
+            ]
+
         if not employees:
-            return {'imported': 0, 'skipped': 0, 'errors': 0, 'total': 0}
+            return {
+                'imported': 0,
+                'updated': 0,
+                'skipped': 0,
+                'errors': 0,
+                'without_face': 0,
+                'total': 0,
+                'requested': len(requested_ids),
+                'overwrite_existing': bool(overwrite_existing),
+            }
 
         self.imported_count = 0
+        self.updated_count = 0
         self.skipped_count = 0
         self.error_count = 0
         self.without_face_count = 0
 
         for emp in employees:
             try:
-                self.import_employee(auth, emp)
+                self.import_employee(auth, emp, overwrite_existing=overwrite_existing)
             except Exception:
                 db.session.rollback()
                 self.error_count += 1
 
         return {
             'imported': self.imported_count,
+            'updated': self.updated_count,
             'skipped': self.skipped_count,
             'errors': self.error_count,
             'without_face': self.without_face_count,
             'total': len(employees),
+            'requested': len(requested_ids) if requested_ids else len(employees),
+            'overwrite_existing': bool(overwrite_existing),
         }

@@ -4,6 +4,7 @@ import { api, setSessionToken } from '../services/api'
 
 export default function Login() {
   const [form, setForm] = useState({ username: '', password: '' })
+  const [loginMode, setLoginMode] = useState('system')
   const [rememberMe, setRememberMe] = useState(false)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
@@ -15,7 +16,9 @@ export default function Login() {
     if (savedRemember) {
       const savedUser = localStorage.getItem('savedUsername') || ''
       const savedPass = localStorage.getItem('savedPassword') || ''
+      const savedMode = localStorage.getItem('savedLoginMode') || 'system'
       setForm({ username: savedUser, password: savedPass })
+      setLoginMode(savedMode === 'internal' ? 'internal' : 'system')
       setRememberMe(true)
     }
     checkCurrentSession()
@@ -40,7 +43,7 @@ export default function Login() {
     setError('')
 
     try {
-      const res = await api.login(form.username, form.password)
+      const res = await api.login(form.username, form.password, loginMode)
       if (res.success) {
         setSessionToken(res.token)
 
@@ -48,15 +51,17 @@ export default function Login() {
           localStorage.setItem('rememberLogin', 'true')
           localStorage.setItem('savedUsername', form.username)
           localStorage.setItem('savedPassword', form.password)
+          localStorage.setItem('savedLoginMode', loginMode)
         } else {
           localStorage.removeItem('rememberLogin')
           localStorage.removeItem('savedUsername')
           localStorage.removeItem('savedPassword')
+          localStorage.removeItem('savedLoginMode')
         }
 
         navigate('/', { replace: true })
       } else {
-        setError(res.message || 'Đăng nhập ERP thất bại')
+        setError(res.message || (loginMode === 'internal' ? 'Đăng nhập nội bộ thất bại' : 'Đăng nhập hệ thống thất bại'))
       }
     } catch {
       setError('Không thể kết nối backend')
@@ -96,26 +101,66 @@ export default function Login() {
           )}
 
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1.5">Tài khoản ERP</label>
+            <p className="block text-sm font-medium text-slate-700 mb-2">Chế độ đăng nhập</p>
+            <div className="grid grid-cols-2 gap-2">
+              <label className={`flex items-center justify-center gap-2 px-3 py-2 rounded-xl border text-sm cursor-pointer transition-colors ${
+                loginMode === 'system'
+                  ? 'border-primary-300 bg-primary-50 text-primary-700'
+                  : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+              }`}>
+                <input
+                  type="radio"
+                  name="loginMode"
+                  value="system"
+                  checked={loginMode === 'system'}
+                  onChange={() => setLoginMode('system')}
+                  className="sr-only"
+                />
+                Login hệ thống
+              </label>
+              <label className={`flex items-center justify-center gap-2 px-3 py-2 rounded-xl border text-sm cursor-pointer transition-colors ${
+                loginMode === 'internal'
+                  ? 'border-emerald-300 bg-emerald-50 text-emerald-700'
+                  : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+              }`}>
+                <input
+                  type="radio"
+                  name="loginMode"
+                  value="internal"
+                  checked={loginMode === 'internal'}
+                  onChange={() => setLoginMode('internal')}
+                  className="sr-only"
+                />
+                Login admin nội bộ
+              </label>
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-slate-700 mb-1.5">
+              {loginMode === 'system' ? 'Tài khoản hệ thống' : 'Tài khoản admin nội bộ'}
+            </label>
             <input
               type="text"
               value={form.username}
               onChange={event => setForm({ ...form, username: event.target.value })}
               className="w-full px-4 py-2.5 border border-slate-300 rounded-xl focus:ring-2 focus:ring-primary-500/30 focus:border-primary-500 transition-all text-sm"
-              placeholder="Nhập mã đăng nhập ERP"
+              placeholder={loginMode === 'system' ? 'Nhập mã đăng nhập hệ thống' : 'Nhập tài khoản nội bộ'}
               required
               autoFocus
             />
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1.5">Mật khẩu</label>
+            <label className="block text-sm font-medium text-slate-700 mb-1.5">
+              {loginMode === 'system' ? 'Mật khẩu hệ thống' : 'Mật khẩu nội bộ'}
+            </label>
             <input
               type="password"
               value={form.password}
               onChange={event => setForm({ ...form, password: event.target.value })}
               className="w-full px-4 py-2.5 border border-slate-300 rounded-xl focus:ring-2 focus:ring-primary-500/30 focus:border-primary-500 transition-all text-sm"
-              placeholder="Nhập mật khẩu ERP"
+              placeholder={loginMode === 'system' ? 'Nhập mật khẩu hệ thống' : 'Nhập mật khẩu nội bộ'}
               required
             />
           </div>
@@ -143,7 +188,7 @@ export default function Login() {
                 <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
                 Đang đăng nhập...
               </span>
-            ) : 'Đăng nhập'}
+            ) : (loginMode === 'system' ? 'Đăng nhập hệ thống' : 'Đăng nhập nội bộ')}
           </button>
         </form>
 

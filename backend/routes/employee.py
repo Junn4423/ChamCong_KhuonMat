@@ -1,11 +1,11 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """Employee routes — ERP employees, admin CRUD.  (maps to frontend modules/employee.js)"""
 
 import io
 import base64
 from datetime import datetime, date
 
-from flask import Blueprint, request, jsonify, g
+from flask import Blueprint, request, jsonify, g, Response
 
 from backend.models.database import db, User, Attendance
 from backend.face_encoding_utils import face_encoding_count, normalize_face_encodings
@@ -14,13 +14,30 @@ from backend.services.import_employees import ERPImporter
 from backend.routes._state import state
 from backend.routes._helpers import (
     admin_required, session_required,
-    sanitize_employee_id,
     get_local_employee_image, save_local_employee_image,
-    remove_local_employee_images,
-    to_data_uri, get_erp_employee_image_blob,
+    remove_local_employee_images, get_local_employee_image_url,
+    get_local_employee_image_token, get_local_employee_erp_image_token, get_employee_image_by_token,
+    build_local_image_url,
+    to_data_uri, get_erp_employee_image_blob, get_erp_employee_image_data,
+    resolve_request_auth_mode,
 )
 
 employee_bp = Blueprint('employee', __name__)
+
+
+@employee_bp.route('/api/image/token/<string:image_token>')
+def serve_image_by_token(image_token):
+    row = get_employee_image_by_token(image_token)
+    if row is None or not row.image_blob:
+        return jsonify({'success': False, 'message': 'Không tìm thấy ảnh theo token'}), 404
+
+    return Response(
+        row.image_blob,
+        mimetype=row.mime_type or 'image/jpeg',
+        headers={
+            'Cache-Control': 'public, max-age=3600',
+        },
+    )
 
 
 # ─── Public ──────────────────────────────────────────────────────────────
@@ -61,8 +78,13 @@ def api_erp_employees():
             registered = local_user is not None
             fc = face_encoding_count(local_user.face_encoding) if local_user else 0
             has_face = fc > 0
-            local_image_bytes, _ = get_local_employee_image(employee_id)
-            has_local_image = local_image_bytes is not None
+            local_image_url = get_local_employee_image_url(employee_id)
+            local_image_token = get_local_employee_image_token(employee_id)
+            local_erp_image_token = get_local_employee_erp_image_token(employee_id)
+            has_local_image = bool(local_image_url)
+            erp_image_token = (emp.get('image_token') or '').strip()
+            erp_image_url = (emp.get('image_url') or '').strip()
+            needs_erp_image_sync = bool(local_image_token and not erp_image_token)
 
             status_text = (
                 'Đã có thông tin trong hệ thống chấm công'
@@ -77,6 +99,14 @@ def api_erp_employees():
                 'has_face': has_face,
                 'face_count': fc,
                 'has_local_image': has_local_image,
+                'image_token': erp_image_token,
+                'erp_image_token': erp_image_token,
+                'local_image_token': local_image_token,
+                'local_erp_image_token': local_erp_image_token,
+                'image_url': erp_image_url,
+                'erp_image_url': erp_image_url,
+                'local_image_url': local_image_url,
+                'needs_erp_image_sync': needs_erp_image_sync,
                 'status_text': status_text,
             })
 
@@ -91,15 +121,46 @@ def api_erp_employees():
 @session_required
 def api_erp_import_all():
     try:
-        def save_img_cb(employee_id, image_blob):
-            save_local_employee_image(employee_id, image_blob, '.jpg')
+        payload = request.get_json(silent=True) or {}
+        raw_ids = payload.get('employee_ids')
+        overwrite_raw = payload.get('overwrite_existing', False)
+
+        employee_ids = []
+        if isinstance(raw_ids, list):
+            for item in raw_ids:
+                employee_id = (str(item or '').strip())
+                if employee_id:
+                    employee_ids.append(employee_id)
+            employee_ids = list(dict.fromkeys(employee_ids))
+
+        if isinstance(overwrite_raw, str):
+            overwrite_existing = overwrite_raw.strip().lower() in {'1', 'true', 'yes', 'y', 'on'}
+        else:
+            overwrite_existing = bool(overwrite_raw)
+
+        def save_img_cb(employee_id, image_blob, employee_data=None):
+            erp_image_token = ''
+            if isinstance(employee_data, dict):
+                erp_image_token = (employee_data.get('image_token') or '').strip()
+
+            save_local_employee_image(
+                employee_id,
+                image_blob,
+                '.jpg',
+                source='erp_import',
+                erp_image_token=erp_image_token,
+            )
 
         importer = ERPImporter(
             face_recognizer=state.face_recognizer,
             erp_client=erp_http_client,
             save_image_callback=save_img_cb,
         )
-        result = importer.import_all_employees(g.erp_auth)
+        result = importer.import_all_employees(
+            g.erp_auth,
+            employee_ids=employee_ids,
+            overwrite_existing=overwrite_existing,
+        )
         state.load_known_faces()
         return jsonify({'success': True, 'result': result})
     except ERPServiceError as exc:
@@ -125,13 +186,17 @@ def get_erp_employee_info():
     local_user = User.query.filter_by(employee_id=employee_id).first()
     fc = face_encoding_count(local_user.face_encoding) if local_user else 0
     has_face = fc > 0
-    local_image_bytes, local_image_path = get_local_employee_image(employee_id)
-    if local_user is None and local_image_bytes is not None:
-        remove_local_employee_images(employee_id)
-        local_image_bytes, local_image_path = (None, None)
+    local_image_url = get_local_employee_image_url(employee_id)
 
-    image_bytes = get_erp_employee_image_blob(employee_id, employee=emp)
-    image_base64 = to_data_uri(image_bytes, '.jpg') if image_bytes else None
+    erp_image_data = get_erp_employee_image_data(employee_id, employee=emp) or {}
+    image_bytes = erp_image_data.get('bytes')
+    image_mime = erp_image_data.get('content_type') or 'image/jpeg'
+    image_url = (
+        (emp.get('image_url') or '').strip()
+        or (erp_image_data.get('source_url') or '').strip()
+    )
+
+    image_base64 = None if image_url else (to_data_uri(image_bytes, image_mime) if image_bytes else None)
 
     registered = local_user is not None
     status_text = (
@@ -139,6 +204,11 @@ def get_erp_employee_info():
         if registered
         else 'Chưa có thông tin trong hệ thống chấm công'
     )
+    erp_image_token = (emp.get('image_token') or '').strip()
+    erp_image_url = (emp.get('image_url') or '').strip()
+    local_image_token = get_local_employee_image_token(employee_id)
+    local_erp_image_token = get_local_employee_erp_image_token(employee_id)
+    needs_erp_image_sync = bool(local_image_token and not erp_image_token)
 
     employee_payload = {
         **emp,
@@ -147,8 +217,16 @@ def get_erp_employee_info():
         'registered': registered,
         'has_face': has_face,
         'face_count': fc,
-        'has_local_image': bool(local_image_bytes) if local_user is not None else False,
+        'has_local_image': bool(local_image_url),
         'status_text': status_text,
+        'image_token': erp_image_token,
+        'erp_image_token': erp_image_token,
+        'local_image_token': local_image_token,
+        'local_erp_image_token': local_erp_image_token,
+        'image_url': image_url,
+        'erp_image_url': erp_image_url,
+        'local_image_url': local_image_url,
+        'needs_erp_image_sync': needs_erp_image_sync,
         'image_base64': image_base64,
         'has_erp_image': bool(image_bytes),
     }
@@ -166,8 +244,19 @@ def get_admin_employees():
         for u in users:
             fc = face_encoding_count(u.face_encoding)
             has_face = fc > 0
-            local_image_bytes, _ = get_local_employee_image(u.employee_id)
-            has_local_image = local_image_bytes is not None
+            local_image_url = get_local_employee_image_url(u.employee_id)
+            local_image_token = get_local_employee_image_token(u.employee_id)
+            has_local_image = bool(local_image_url)
+
+            if has_face:
+                status_code = 'ready'
+                status_text = 'Đã đăng ký khuôn mặt'
+            elif has_local_image:
+                status_code = 'image_only'
+                status_text = 'Đã cập nhật ảnh, chưa trích xuất khuôn mặt'
+            else:
+                status_code = 'empty'
+                status_text = 'Đã có trong hệ thống (chưa có khuôn mặt)'
 
             employees.append({
                 'id': u.id,
@@ -178,7 +267,10 @@ def get_admin_employees():
                 'has_face': has_face,
                 'face_count': fc,
                 'has_local_image': has_local_image,
-                'status_text': 'Đã đăng ký khuôn mặt' if has_face else 'Đã có trong hệ thống (chưa có khuôn mặt)',
+                'image_token': local_image_token,
+                'image_url': local_image_url,
+                'status_code': status_code,
+                'status_text': status_text,
                 'created_at': u.created_at.strftime('%Y-%m-%d %H:%M') if u.created_at else '',
             })
         return jsonify({'success': True, 'employees': employees})
@@ -194,11 +286,11 @@ def get_admin_employee_image():
         return jsonify({'success': False, 'message': 'Thiếu mã nhân viên'}), 400
 
     user = User.query.filter_by(employee_id=employee_id).first()
-    image_bytes, image_path = get_local_employee_image(employee_id)
-    image_source = 'local'
-    if user is None and image_bytes is not None:
-        remove_local_employee_images(employee_id)
-        image_bytes, image_path = (None, None)
+    image_bytes, image_mime = get_local_employee_image(employee_id)
+    local_image_token = get_local_employee_image_token(employee_id)
+    image_url = build_local_image_url(local_image_token) if local_image_token else ''
+    local_image_available = bool(image_url)
+    image_source = 'local_token'
 
     if image_bytes is None and getattr(g, 'erp_auth', None):
         erp_emp = None
@@ -207,10 +299,23 @@ def get_admin_employee_image():
         except Exception:
             erp_emp = None
 
-        image_bytes = get_erp_employee_image_blob(employee_id, employee=erp_emp)
+        image_data = get_erp_employee_image_data(employee_id, employee=erp_emp)
+        image_bytes = image_data.get('bytes') if isinstance(image_data, dict) else None
         if image_bytes:
             image_source = 'erp'
-            image_path = '.jpg'
+            image_mime = image_data.get('content_type') if isinstance(image_data, dict) else 'image/jpeg'
+            image_url = (
+                (image_data.get('local_image_url') or '').strip()
+                if isinstance(image_data, dict)
+                else ''
+            ) or (
+                (image_data.get('source_url') or '').strip()
+                if isinstance(image_data, dict)
+                else ''
+            ) or ((erp_emp or {}).get('image_url') or '').strip()
+            if image_url and not local_image_token:
+                local_image_token = get_local_employee_image_token(employee_id)
+                local_image_available = bool(local_image_token)
 
     if image_bytes is None:
         return jsonify({'success': False, 'message': 'Không tìm thấy ảnh nhân viên'}), 404
@@ -222,7 +327,16 @@ def get_admin_employee_image():
         'position': user.position if user else '',
         'has_face': face_encoding_count(user.face_encoding) > 0 if user else False,
         'face_count': face_encoding_count(user.face_encoding) if user else 0,
-        'status_text': 'Đã đăng ký khuôn mặt' if (user and face_encoding_count(user.face_encoding) > 0) else 'Đã có trong hệ thống',
+        'status_code': (
+            'ready'
+            if (user and face_encoding_count(user.face_encoding) > 0)
+            else ('image_only' if (user and local_image_available) else 'empty')
+        ),
+        'status_text': (
+            'Đã đăng ký khuôn mặt'
+            if (user and face_encoding_count(user.face_encoding) > 0)
+            else ('Đã cập nhật ảnh, chưa trích xuất khuôn mặt' if (user and local_image_available) else 'Đã có trong hệ thống (chưa có khuôn mặt)')
+        ),
         'id': user.id if user else None,
     }
 
@@ -238,7 +352,10 @@ def get_admin_employee_image():
     return jsonify({
         'success': True,
         'employee': employee_payload,
-        'image_base64': to_data_uri(image_bytes, image_path),
+        'image_token': local_image_token,
+        'erp_image_token': get_local_employee_erp_image_token(employee_id),
+        'image_url': image_url,
+        'image_base64': None if image_url else to_data_uri(image_bytes, image_mime),
         'image_source': image_source,
     })
 
@@ -276,6 +393,20 @@ def admin_update_face():
         if error:
             return jsonify({'success': False, 'message': error}), 400
 
+        token_username = ''
+        session_user = getattr(g, 'session_user', None)
+        if isinstance(session_user, dict):
+            token_username = (session_user.get('code') or '').strip()
+        if not token_username and getattr(g, 'erp_auth', None):
+            token_username = (g.erp_auth.get('code') or '').strip()
+
+        sof_token_payload = erp_http_client.create_sof_image_token(
+            image_bytes,
+            username=token_username or None,
+            auth=getattr(g, 'erp_auth', None),
+        )
+        erp_image_token = str(sof_token_payload.get('token') or '').strip()
+
         replace_all = False
         if isinstance(data, dict):
             replace_all = bool(data.get('replace_all', False))
@@ -283,7 +414,8 @@ def admin_update_face():
             replace_all = (request.form.get('replace_all', 'false').lower() == 'true')
 
         current_encodings = normalize_face_encodings(user.face_encoding)
-        new_encoding = normalize_face_encodings(face_encoding)[0] if normalize_face_encodings(face_encoding) else []
+        normalized_new = normalize_face_encodings(face_encoding)
+        new_encoding = normalized_new[0] if normalized_new else []
         if replace_all:
             user.face_encoding = [new_encoding] if new_encoding else []
         else:
@@ -291,18 +423,29 @@ def admin_update_face():
             user.face_encoding = merged[-5:] if len(merged) > 5 else merged
 
         db.session.commit()
-        save_local_employee_image(user.employee_id, image_bytes, '.jpg')
+        image_token = save_local_employee_image(
+            user.employee_id,
+            image_bytes,
+            '.jpg',
+            source='manual_upload',
+            erp_image_token=erp_image_token,
+        )
         state.load_known_faces()
 
         return jsonify({
             'success': True,
-            'message': f'Đã cập nhật khuôn mặt cho {user.name}',
+            'message': f'Cập nhật khuôn mặt cho {user.name}',
             'face_count': face_encoding_count(user.face_encoding),
+            'image_token': image_token,
+            'erp_image_token': erp_image_token,
+            'image_url': build_local_image_url(image_token) if image_token else '',
         })
+    except ERPServiceError as exc:
+        db.session.rollback()
+        return jsonify({'success': False, 'message': exc.message}), (exc.status_code or 500)
     except Exception as exc:
         db.session.rollback()
         return jsonify({'success': False, 'message': str(exc)}), 500
-
 
 @employee_bp.route('/api/admin/push_to_erp', methods=['POST'])
 @admin_required
@@ -317,26 +460,56 @@ def admin_push_to_erp():
     if not employee_id:
         return jsonify({'success': False, 'message': 'Thiếu mã nhân viên'}), 400
 
-    if not getattr(g, 'erp_auth', None):
-        return jsonify({'success': False, 'message': 'Phiên ERP hết hạn. Vui lòng đăng nhập lại'}), 401
+    if resolve_request_auth_mode(default='internal') != 'system':
+        return jsonify({
+            'success': False,
+            'message': 'Đang ở chế độ nội bộ. Vui lòng đăng nhập hệ thống để đẩy dữ liệu lên ERP.',
+        }), 403
 
     image_bytes, _ = get_local_employee_image(employee_id)
     if image_bytes is None:
-        return jsonify({'success': False, 'message': 'Không có ảnh local để đẩy ERP'}), 404
+        return jsonify({'success': False, 'message': 'Không có ảnh local để đăng ký token ERP'}), 404
 
     try:
-        erp_http_client.upload_employee_image(
-            g.erp_auth,
+        erp_image_token = get_local_employee_erp_image_token(employee_id)
+        if not erp_image_token:
+            token_username = ''
+            session_user = getattr(g, 'session_user', None)
+            if isinstance(session_user, dict):
+                token_username = (session_user.get('code') or '').strip()
+            if not token_username and getattr(g, 'erp_auth', None):
+                token_username = (g.erp_auth.get('code') or '').strip()
+
+            sof_token_payload = erp_http_client.create_sof_image_token(
+                image_bytes,
+                username=token_username or None,
+                auth=getattr(g, 'erp_auth', None),
+            )
+            erp_image_token = str(sof_token_payload.get('token') or '').strip()
+            save_local_employee_image(
+                employee_id,
+                image_bytes,
+                '.jpg',
+                source='erp_push_cache',
+                erp_image_token=erp_image_token,
+            )
+
+        erp_update_result = erp_http_client.update_employee_image_token(
             employee_id,
-            image_bytes,
-            filename=f'{sanitize_employee_id(employee_id)}.jpg',
+            erp_image_token,
+            auth=getattr(g, 'erp_auth', None),
         )
-        return jsonify({'success': True, 'message': f'Đã đẩy ảnh lên ERP cho {employee_id}'})
+        return jsonify({
+            'success': True,
+            'message': f'Cập nhật token ảnh lên ERP cho {employee_id}',
+            'erp_image_token': erp_image_token,
+            'erp_column': erp_http_client.token_column,
+            'erp_update': erp_update_result,
+        })
     except ERPServiceError as exc:
         return jsonify({'success': False, 'message': exc.message}), (exc.status_code or 500)
     except Exception as exc:
         return jsonify({'success': False, 'message': str(exc)}), 500
-
 
 @employee_bp.route('/api/admin/delete_employee/<int:user_id>', methods=['DELETE'])
 @admin_required
@@ -403,7 +576,8 @@ def reload_from_erp():
 
         user.face_encoding = normalize_face_encodings(face_encoding)
         db.session.commit()
-        save_local_employee_image(employee_id, image_blob, '.jpg')
+        erp_image_token = (employee_meta.get('image_token') or '').strip()
+        save_local_employee_image(employee_id, image_blob, '.jpg', source='erp_reload', erp_image_token=erp_image_token)
         state.load_known_faces()
         return jsonify({'success': True, 'message': f'Đã tải lại dữ liệu từ ERP cho {user.name}'})
     except ERPServiceError as exc:
@@ -411,3 +585,5 @@ def reload_from_erp():
     except Exception as exc:
         db.session.rollback()
         return jsonify({'success': False, 'message': str(exc)}), 500
+
+

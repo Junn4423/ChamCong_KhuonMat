@@ -6,6 +6,62 @@ function isBrowserCameraType(cameraType) {
   return cameraType === 'browser' || cameraType === 'mobile'
 }
 
+const FIXED_BROWSER_CAMERA_ID = 'fixed-browser-camera'
+const BROWSER_DEVICE_STORAGE_PREFIX = 'attendance-browser-device:'
+const LIVE_DETECT_INTERVAL_MS = 900
+const LIVE_DETECT_MAX_WIDTH = 480
+
+const FIXED_BROWSER_CAMERA = {
+  id: FIXED_BROWSER_CAMERA_ID,
+  name: 'Camera trình duyệt cố định',
+  camera_type: 'browser',
+  device_index: 0,
+  rtsp_url: '',
+  is_default: false,
+  camera_options: {
+    frame_width: 1280,
+    frame_height: 720,
+    target_fps: 25,
+    buffer_size: 2,
+    frame_drop_count: 0,
+    low_latency: true,
+    facing_mode: 'user',
+    preview_mirror: true,
+    browser_device_id: '',
+  },
+  processing_options: {
+    fps_limit: 25,
+    skip_ai_frames: 1,
+    stream_jpeg_quality: 85,
+    no_motion_delay: 2.0,
+  },
+}
+
+function buildBrowserDeviceStorageKey(cameraId) {
+  return `${BROWSER_DEVICE_STORAGE_PREFIX}${cameraId || FIXED_BROWSER_CAMERA_ID}`
+}
+
+function readSavedBrowserDeviceId(cameraId) {
+  const key = buildBrowserDeviceStorageKey(cameraId)
+  return (localStorage.getItem(key) || '').trim()
+}
+
+function saveBrowserDeviceId(cameraId, deviceId) {
+  const key = buildBrowserDeviceStorageKey(cameraId)
+  const normalized = (deviceId || '').trim()
+  if (normalized) {
+    localStorage.setItem(key, normalized)
+    return
+  }
+  localStorage.removeItem(key)
+}
+
+function withFixedBrowserCamera(list) {
+  const source = Array.isArray(list) ? list : []
+  const hasFixed = source.some(item => item?.id === FIXED_BROWSER_CAMERA_ID)
+  return hasFixed ? source : [FIXED_BROWSER_CAMERA, ...source]
+}
+
 function buildStartPayload(camera) {
   return {
     camera_id: camera.id || undefined,
@@ -17,10 +73,11 @@ function buildStartPayload(camera) {
   }
 }
 
-function buildBrowserConstraints(camera) {
+function buildBrowserConstraints(camera, browserDeviceId = '') {
   const cameraOptions = camera?.camera_options || {}
   const facingMode = cameraOptions.facing_mode || 'user'
-  const constraints = {
+  const fixedDeviceId = (browserDeviceId || '').trim()
+  const baseConstraints = {
     audio: false,
     video: {
       width: { ideal: Number(cameraOptions.frame_width) || 1280 },
@@ -28,11 +85,220 @@ function buildBrowserConstraints(camera) {
     },
   }
 
-  if (facingMode && facingMode !== 'any') {
-    constraints.video.facingMode = { ideal: facingMode }
+  const constraints = []
+
+  if (fixedDeviceId) {
+    constraints.push(
+      {
+        ...baseConstraints,
+        video: {
+          ...baseConstraints.video,
+          deviceId: { exact: fixedDeviceId },
+        },
+      },
+      {
+        ...baseConstraints,
+        video: {
+          ...baseConstraints.video,
+          deviceId: { ideal: fixedDeviceId },
+        },
+      },
+      {
+        audio: false,
+        video: {
+          deviceId: { exact: fixedDeviceId },
+        },
+      },
+    )
   }
 
+  if (!facingMode || facingMode === 'any') {
+    constraints.push(baseConstraints, { audio: false, video: true })
+    return constraints
+  }
+
+  const fallbackMode = facingMode === 'environment' ? 'user' : 'environment'
+
+  constraints.push(
+    {
+      ...baseConstraints,
+      video: {
+        ...baseConstraints.video,
+        facingMode: { ideal: facingMode },
+      },
+    },
+    {
+      ...baseConstraints,
+      video: {
+        ...baseConstraints.video,
+        facingMode,
+      },
+    },
+    {
+      ...baseConstraints,
+      video: {
+        ...baseConstraints.video,
+        facingMode: fallbackMode,
+      },
+    },
+    { audio: false, video: { facingMode } },
+    { audio: false, video: true },
+  )
+
   return constraints
+}
+
+async function tryOpenBrowserCamera(constraintsList) {
+  let lastError = null
+
+  for (const constraints of constraintsList) {
+    try {
+      return await navigator.mediaDevices.getUserMedia(constraints)
+    } catch (error) {
+      lastError = error
+    }
+  }
+
+  throw lastError || new Error('Không thể mở camera trình duyệt')
+}
+
+function waitForVideoFrame(videoElement, timeoutMs = 7000) {
+  if (!videoElement) {
+    const error = new Error('Không tìm thấy vùng preview video')
+    error.code = 'NO_VIDEO_FRAME'
+    return Promise.reject(error)
+  }
+
+  if (videoElement.readyState >= 2 && videoElement.videoWidth > 0 && videoElement.videoHeight > 0) {
+    return Promise.resolve()
+  }
+
+  return new Promise((resolve, reject) => {
+    let settled = false
+
+    const cleanup = () => {
+      if (settled) return
+      settled = true
+      clearTimeout(timeoutHandle)
+      videoElement.removeEventListener('loadedmetadata', checkReady)
+      videoElement.removeEventListener('loadeddata', checkReady)
+      videoElement.removeEventListener('canplay', checkReady)
+      videoElement.removeEventListener('playing', checkReady)
+      videoElement.removeEventListener('resize', checkReady)
+      videoElement.removeEventListener('error', handleVideoError)
+    }
+
+    const handleVideoError = () => {
+      cleanup()
+      const error = new Error('Không tải được luồng video từ camera')
+      error.code = 'NO_VIDEO_FRAME'
+      reject(error)
+    }
+
+    const checkReady = () => {
+      if (videoElement.readyState >= 2 && videoElement.videoWidth > 0 && videoElement.videoHeight > 0) {
+        cleanup()
+        resolve()
+      }
+    }
+
+    const timeoutHandle = setTimeout(() => {
+      cleanup()
+      const error = new Error('Camera đã mở nhưng chưa nhận được khung hình')
+      error.code = 'NO_VIDEO_FRAME'
+      reject(error)
+    }, timeoutMs)
+
+    videoElement.addEventListener('loadedmetadata', checkReady)
+    videoElement.addEventListener('loadeddata', checkReady)
+    videoElement.addEventListener('canplay', checkReady)
+    videoElement.addEventListener('playing', checkReady)
+    videoElement.addEventListener('resize', checkReady)
+    videoElement.addEventListener('error', handleVideoError)
+
+    checkReady()
+  })
+}
+
+async function attachStreamToVideo(videoElement, stream) {
+  if (!videoElement || !stream) {
+    const error = new Error('Không thể gắn camera vào khung preview')
+    error.code = 'NO_VIDEO_FRAME'
+    throw error
+  }
+
+  videoElement.autoplay = true
+  videoElement.muted = true
+  videoElement.playsInline = true
+  videoElement.setAttribute('autoplay', 'true')
+  videoElement.setAttribute('muted', 'true')
+  videoElement.setAttribute('playsinline', 'true')
+  videoElement.setAttribute('webkit-playsinline', 'true')
+  if ('disablePictureInPicture' in videoElement) {
+    videoElement.disablePictureInPicture = true
+  }
+
+  if (videoElement.srcObject !== stream) {
+    videoElement.srcObject = stream
+  }
+
+  try {
+    await videoElement.play()
+  } catch {
+    // Safari can require metadata first before play succeeds.
+  }
+
+  await waitForVideoFrame(videoElement)
+
+  if (videoElement.paused) {
+    try {
+      await videoElement.play()
+    } catch {
+      // Keep fallback silent; readiness check below will raise explicit error.
+    }
+  }
+
+  if (!videoElement.videoWidth || !videoElement.videoHeight) {
+    const error = new Error('Camera đã mở nhưng không có khung hình hiển thị')
+    error.code = 'NO_VIDEO_FRAME'
+    throw error
+  }
+}
+
+function getCameraErrorMessage(error, requiresSecureContext) {
+  const name = error?.name || ''
+
+  if (error?.code === 'NO_VIDEO_FRAME') {
+    return 'Đã cấp quyền camera nhưng không nhận được khung hình. Hãy thử đổi camera trong danh sách hoặc bấm Bật camera lại.'
+  }
+
+  if (requiresSecureContext || name === 'SecurityError') {
+    return 'Trình duyệt iPhone yêu cầu HTTPS (hoặc webview đã cấp quyền) để mở camera trực tiếp.'
+  }
+
+  if (name === 'NotAllowedError' || name === 'PermissionDeniedError') {
+    return 'Camera đang bị từ chối quyền truy cập. Hãy bật quyền Camera cho trình duyệt/webview rồi thử lại.'
+  }
+
+  if (name === 'NotFoundError' || name === 'DevicesNotFoundError') {
+    return 'Không tìm thấy camera trên thiết bị.'
+  }
+
+  if (name === 'NotReadableError' || name === 'TrackStartError') {
+    return 'Camera đang được ứng dụng khác sử dụng. Hãy đóng ứng dụng đó rồi thử lại.'
+  }
+
+  if (name === 'OverconstrainedError' || name === 'ConstraintNotSatisfiedError') {
+    return 'Thông số camera chưa phù hợp với thiết bị. Hãy đổi hướng camera hoặc thử lại.'
+  }
+
+  return error?.message || 'Không thể mở camera trình duyệt'
+}
+
+function sanitizeDeviceLabel(label, index) {
+  const normalized = (label || '').trim()
+  if (normalized) return normalized
+  return `Camera ${index + 1}`
 }
 
 function describeCamera(camera) {
@@ -70,6 +336,68 @@ function formatLocation(location) {
   return `${coords}${accText}`
 }
 
+function computeContainedVideoRect(containerWidth, containerHeight, frameWidth, frameHeight) {
+  if (!containerWidth || !containerHeight || !frameWidth || !frameHeight) return null
+
+  const containerAspect = containerWidth / containerHeight
+  const frameAspect = frameWidth / frameHeight
+
+  if (frameAspect > containerAspect) {
+    const renderWidth = containerWidth
+    const renderHeight = renderWidth / frameAspect
+    return {
+      renderWidth,
+      renderHeight,
+      offsetX: 0,
+      offsetY: (containerHeight - renderHeight) / 2,
+    }
+  }
+
+  const renderHeight = containerHeight
+  const renderWidth = renderHeight * frameAspect
+  return {
+    renderWidth,
+    renderHeight,
+    offsetX: (containerWidth - renderWidth) / 2,
+    offsetY: 0,
+  }
+}
+
+function projectDetectionBoxToPreview(detection, frameSize, containerSize, mirrored = false) {
+  const bbox = Array.isArray(detection?.bbox) ? detection.bbox : null
+  if (!bbox || bbox.length < 4) return null
+
+  const frameWidth = Number(frameSize?.width) || 0
+  const frameHeight = Number(frameSize?.height) || 0
+  const containerWidth = Number(containerSize?.width) || 0
+  const containerHeight = Number(containerSize?.height) || 0
+  if (!frameWidth || !frameHeight || !containerWidth || !containerHeight) return null
+
+  const fit = computeContainedVideoRect(containerWidth, containerHeight, frameWidth, frameHeight)
+  if (!fit) return null
+
+  let [x1, y1, x2, y2] = bbox.map(value => Number(value) || 0)
+  x1 = Math.max(0, Math.min(frameWidth - 1, x1))
+  y1 = Math.max(0, Math.min(frameHeight - 1, y1))
+  x2 = Math.max(x1 + 1, Math.min(frameWidth, x2))
+  y2 = Math.max(y1 + 1, Math.min(frameHeight, y2))
+
+  if (mirrored) {
+    const mirroredX1 = frameWidth - x2
+    const mirroredX2 = frameWidth - x1
+    x1 = Math.max(0, mirroredX1)
+    x2 = Math.min(frameWidth, mirroredX2)
+  }
+
+  const left = fit.offsetX + (x1 / frameWidth) * fit.renderWidth
+  const top = fit.offsetY + (y1 / frameHeight) * fit.renderHeight
+  const width = ((x2 - x1) / frameWidth) * fit.renderWidth
+  const height = ((y2 - y1) / frameHeight) * fit.renderHeight
+
+  if (width < 2 || height < 2) return null
+  return { left, top, width, height }
+}
+
 export default function Attendance() {
   const [cameraRunning, setCameraRunning] = useState(false)
   const [cameraLoading, setCameraLoading] = useState(false)
@@ -85,11 +413,23 @@ export default function Attendance() {
   const [streamKey, setStreamKey] = useState(Date.now())
   const [attendanceBusy, setAttendanceBusy] = useState(false)
   const [attendanceFeedback, setAttendanceFeedback] = useState(null)
+  const [lastCapturePreview, setLastCapturePreview] = useState(null)
+  const [liveDetections, setLiveDetections] = useState([])
+  const [liveDetectionFrame, setLiveDetectionFrame] = useState({ width: 0, height: 0 })
+  const [liveDetectionError, setLiveDetectionError] = useState('')
+  const [previewViewport, setPreviewViewport] = useState({ width: 0, height: 0 })
+  const [browserDevices, setBrowserDevices] = useState([])
+  const [browserDevicesLoading, setBrowserDevicesLoading] = useState(false)
+  const [selectedBrowserDeviceId, setSelectedBrowserDeviceId] = useState('')
 
   const imgRef = useRef(null)
+  const previewContainerRef = useRef(null)
   const videoRef = useRef(null)
   const canvasRef = useRef(null)
+  const detectCanvasRef = useRef(null)
   const locationTimerRef = useRef(null)
+  const detectTimerRef = useRef(null)
+  const detectInFlightRef = useRef(false)
   const browserStreamRef = useRef(null)
 
   const selectedCamera = useMemo(
@@ -106,6 +446,7 @@ export default function Attendance() {
   const browserCameraSupported = typeof navigator !== 'undefined'
     && !!navigator.mediaDevices
     && typeof navigator.mediaDevices.getUserMedia === 'function'
+    && typeof navigator.mediaDevices.enumerateDevices === 'function'
   const requiresSecureContext = typeof window !== 'undefined' && !window.isSecureContext
 
   useEffect(() => {
@@ -114,9 +455,52 @@ export default function Attendance() {
     return () => {
       clearInterval(attendanceTimer)
       if (locationTimerRef.current) clearInterval(locationTimerRef.current)
+      if (detectTimerRef.current) clearInterval(detectTimerRef.current)
       stopBrowserCameraStream()
     }
   }, [])
+
+  useEffect(() => {
+    if (!browserCameraSelected || !selectedCamera) {
+      setBrowserDevices([])
+      setSelectedBrowserDeviceId('')
+      return
+    }
+
+    const preferredId = (
+      readSavedBrowserDeviceId(selectedCamera.id)
+      || selectedCamera.camera_options?.browser_device_id
+      || ''
+    ).trim()
+    setSelectedBrowserDeviceId(preferredId)
+    loadBrowserDevices({ withPermission: false, preferredDeviceId: preferredId })
+  }, [browserCameraSelected, selectedCamera?.id])
+
+  useEffect(() => {
+    if (!browserCameraSupported || typeof navigator === 'undefined' || !navigator.mediaDevices) {
+      return undefined
+    }
+
+    const mediaDevices = navigator.mediaDevices
+    const handleDeviceChange = () => {
+      loadBrowserDevices({ withPermission: false })
+    }
+
+    if (typeof mediaDevices.addEventListener === 'function') {
+      mediaDevices.addEventListener('devicechange', handleDeviceChange)
+      return () => {
+        mediaDevices.removeEventListener('devicechange', handleDeviceChange)
+      }
+    }
+
+    const previousHandler = mediaDevices.ondevicechange
+    mediaDevices.ondevicechange = handleDeviceChange
+    return () => {
+      if (mediaDevices.ondevicechange === handleDeviceChange) {
+        mediaDevices.ondevicechange = previousHandler || null
+      }
+    }
+  }, [browserCameraSupported, selectedCamera?.id])
 
   useEffect(() => {
     if (locationTimerRef.current) {
@@ -136,6 +520,143 @@ export default function Attendance() {
     }
   }, [locationEnabled])
 
+  useEffect(() => {
+    const container = previewContainerRef.current
+    if (!container) return undefined
+
+    const updateViewport = () => {
+      setPreviewViewport({
+        width: container.clientWidth || 0,
+        height: container.clientHeight || 0,
+      })
+    }
+
+    updateViewport()
+
+    if (typeof ResizeObserver === 'undefined') {
+      window.addEventListener('resize', updateViewport)
+      return () => {
+        window.removeEventListener('resize', updateViewport)
+      }
+    }
+
+    const observer = new ResizeObserver(updateViewport)
+    observer.observe(container)
+    return () => {
+      observer.disconnect()
+    }
+  }, [browserCameraSelected])
+
+  useEffect(() => {
+    if (detectTimerRef.current) {
+      clearInterval(detectTimerRef.current)
+      detectTimerRef.current = null
+    }
+
+    detectInFlightRef.current = false
+
+    if (!(cameraRunning && cameraRuntimeMode === 'browser' && browserCameraSelected)) {
+      setLiveDetections([])
+      setLiveDetectionFrame({ width: 0, height: 0 })
+      setLiveDetectionError('')
+      return undefined
+    }
+
+    let cancelled = false
+
+    const detectRealtimeFaces = async () => {
+      if (cancelled || detectInFlightRef.current || attendanceBusy) return
+
+      const video = videoRef.current
+      const detectCanvas = detectCanvasRef.current
+      if (!video || !detectCanvas) return
+      if (!video.videoWidth || !video.videoHeight || video.readyState < 2) return
+
+      detectInFlightRef.current = true
+      try {
+        const targetWidth = Math.max(160, Math.min(video.videoWidth, LIVE_DETECT_MAX_WIDTH))
+        const scale = targetWidth / Math.max(1, video.videoWidth)
+        const targetHeight = Math.max(120, Math.round(video.videoHeight * scale))
+
+        detectCanvas.width = targetWidth
+        detectCanvas.height = targetHeight
+
+        const context = detectCanvas.getContext('2d')
+        if (!context) return
+
+        context.drawImage(video, 0, 0, targetWidth, targetHeight)
+
+        const res = await api.attendanceDetectFrame({
+          image_base64: detectCanvas.toDataURL('image/jpeg', 0.65),
+          max_faces: 3,
+          recognize: false,
+        })
+
+        if (cancelled) return
+
+        if (res?.success) {
+          setLiveDetections(Array.isArray(res.detections) ? res.detections : [])
+          setLiveDetectionFrame({
+            width: Number(res.frame_width) || targetWidth,
+            height: Number(res.frame_height) || targetHeight,
+          })
+          setLiveDetectionError('')
+        } else {
+          setLiveDetectionError(res?.message || 'Không nhận được dữ liệu nhận diện realtime')
+        }
+      } catch (error) {
+        if (!cancelled) {
+          console.error(error)
+          setLiveDetectionError('Không thể nhận diện realtime từ camera trình duyệt')
+        }
+      } finally {
+        detectInFlightRef.current = false
+      }
+    }
+
+    detectRealtimeFaces()
+    detectTimerRef.current = setInterval(detectRealtimeFaces, LIVE_DETECT_INTERVAL_MS)
+
+    return () => {
+      cancelled = true
+      if (detectTimerRef.current) {
+        clearInterval(detectTimerRef.current)
+        detectTimerRef.current = null
+      }
+      detectInFlightRef.current = false
+    }
+  }, [attendanceBusy, browserCameraSelected, cameraRunning, cameraRuntimeMode])
+
+  useEffect(() => {
+    if (!cameraRunning || cameraRuntimeMode !== 'browser') return
+
+    const videoElement = videoRef.current
+    const browserStream = browserStreamRef.current
+    if (!videoElement || !browserStream) return
+
+    let cancelled = false
+
+    const bindPreview = async () => {
+      try {
+        await attachStreamToVideo(videoElement, browserStream)
+      } catch (error) {
+        if (cancelled) return
+        console.error(error)
+        window.alert(getCameraErrorMessage(error, requiresSecureContext))
+        stopBrowserCameraStream()
+        setCameraRunning(false)
+        setCameraRuntimeMode(null)
+        setActiveCameraId('')
+      }
+    }
+
+    bindPreview()
+
+    return () => {
+      cancelled = true
+    }
+  }, [cameraRunning, cameraRuntimeMode, requiresSecureContext])
+
   async function initializePage() {
     await Promise.all([
       checkCameraStatus(),
@@ -152,6 +673,7 @@ export default function Attendance() {
     }
 
     if (videoRef.current) {
+      videoRef.current.pause()
       videoRef.current.srcObject = null
     }
   }
@@ -175,7 +697,7 @@ export default function Attendance() {
     try {
       const res = await api.getCameras()
       if (!res.success) return
-      const list = res.cameras || []
+      const list = withFixedBrowserCamera(res.cameras || [])
       setCameras(list)
 
       if (list.length === 0) {
@@ -212,15 +734,75 @@ export default function Attendance() {
     }
   }
 
+  async function loadBrowserDevices({ withPermission = false, preferredDeviceId = '' } = {}) {
+    if (!browserCameraSupported || !navigator.mediaDevices?.enumerateDevices) {
+      setBrowserDevices([])
+      return []
+    }
+
+    setBrowserDevicesLoading(true)
+    try {
+      if (withPermission) {
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false })
+          stream.getTracks().forEach(track => track.stop())
+        } catch {
+          // Ignore permission errors here; actual start flow handles it with user-facing message.
+        }
+      }
+
+      let allDevices = await navigator.mediaDevices.enumerateDevices()
+      let videoInputs = allDevices.filter(item => item.kind === 'videoinput')
+
+      if (withPermission && videoInputs.some(item => !(item.label || '').trim())) {
+        allDevices = await navigator.mediaDevices.enumerateDevices()
+        videoInputs = allDevices.filter(item => item.kind === 'videoinput')
+      }
+
+      const normalized = videoInputs.map((device, index) => ({
+        id: device.deviceId,
+        label: sanitizeDeviceLabel(device.label, index),
+      }))
+
+      setBrowserDevices(normalized)
+
+      const preferred = (preferredDeviceId || selectedBrowserDeviceId || '').trim()
+      if (preferred && normalized.some(item => item.id === preferred)) {
+        setSelectedBrowserDeviceId(preferred)
+      } else if (selectedBrowserDeviceId && !normalized.some(item => item.id === selectedBrowserDeviceId)) {
+        setSelectedBrowserDeviceId('')
+      }
+
+      return normalized
+    } catch (error) {
+      console.error(error)
+      return []
+    } finally {
+      setBrowserDevicesLoading(false)
+    }
+  }
+
+  function handleBrowserDeviceChange(deviceId) {
+    const normalized = (deviceId || '').trim()
+    setSelectedBrowserDeviceId(normalized)
+    if (selectedCamera?.id) {
+      saveBrowserDeviceId(selectedCamera.id, normalized)
+    }
+  }
+
   async function handleStartBrowserCamera() {
     if (!selectedCamera) return
     if (!browserCameraSupported) {
-      window.alert('Thiết bị hoặc trình duyệt hiện tại chưa hỗ trợ camera trực tiếp.')
+      window.alert('Thiết bị hoặc trình duyệt hiện tại chưa hỗ trợ mở camera trực tiếp bằng getUserMedia.')
       return
     }
 
     setCameraLoading(true)
     setAttendanceFeedback(null)
+    setLastCapturePreview(null)
+    setLiveDetections([])
+    setLiveDetectionFrame({ width: 0, height: 0 })
+    setLiveDetectionError('')
 
     try {
       if (cameraRuntimeMode === 'backend') {
@@ -230,23 +812,32 @@ export default function Attendance() {
 
       stopBrowserCameraStream()
 
-      const stream = await navigator.mediaDevices.getUserMedia(buildBrowserConstraints(selectedCamera))
+      await loadBrowserDevices({ withPermission: true })
+      const preferredDeviceId = (selectedBrowserDeviceId || '').trim()
+
+      const stream = await tryOpenBrowserCamera(buildBrowserConstraints(selectedCamera, preferredDeviceId))
+
+      const track = stream.getVideoTracks()?.[0]
+      if (!track || track.readyState !== 'live') {
+        stream.getTracks().forEach(item => item.stop())
+        const error = new Error('Không thể lấy luồng video trực tiếp từ camera')
+        error.code = 'NO_VIDEO_FRAME'
+        throw error
+      }
+
       browserStreamRef.current = stream
 
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream
-        try {
-          await videoRef.current.play()
-        } catch (error) {
-          console.error(error)
-        }
+      const openedDeviceId = (track?.getSettings?.().deviceId || preferredDeviceId || '').trim()
+      if (openedDeviceId && selectedCamera?.id) {
+        setSelectedBrowserDeviceId(openedDeviceId)
+        saveBrowserDeviceId(selectedCamera.id, openedDeviceId)
       }
 
       setCameraRunning(true)
       setCameraRuntimeMode('browser')
       setActiveCameraId(selectedCamera.id || '')
     } catch (error) {
-      const message = error?.message || 'Không thể mở camera trình duyệt'
+      const message = getCameraErrorMessage(error, requiresSecureContext)
       window.alert(message)
     }
 
@@ -266,6 +857,10 @@ export default function Attendance() {
 
     setCameraLoading(true)
     setAttendanceFeedback(null)
+    setLastCapturePreview(null)
+    setLiveDetections([])
+    setLiveDetectionFrame({ width: 0, height: 0 })
+    setLiveDetectionError('')
     try {
       stopBrowserCameraStream()
       const res = await api.startCamera(buildStartPayload(selectedCamera))
@@ -295,6 +890,10 @@ export default function Attendance() {
       setCameraRunning(false)
       setCameraRuntimeMode(null)
       setActiveCameraId('')
+      setLastCapturePreview(null)
+      setLiveDetections([])
+      setLiveDetectionFrame({ width: 0, height: 0 })
+      setLiveDetectionError('')
     } catch (error) {
       console.error(error)
     }
@@ -318,19 +917,19 @@ export default function Attendance() {
       return
     }
 
+    const canvas = canvasRef.current
+    canvas.width = video.videoWidth
+    canvas.height = video.videoHeight
+
+    const context = canvas.getContext('2d')
+    context.drawImage(video, 0, 0, canvas.width, canvas.height)
     setAttendanceBusy(true)
     setAttendanceFeedback(null)
 
     try {
-      const canvas = canvasRef.current
-      canvas.width = video.videoWidth
-      canvas.height = video.videoHeight
-
-      const context = canvas.getContext('2d')
-      context.drawImage(video, 0, 0, canvas.width, canvas.height)
-
       const payload = {
         image_base64: canvas.toDataURL('image/jpeg', 0.9),
+        include_preview: true,
       }
 
       if (locationEnabled && locationInfo) {
@@ -338,6 +937,15 @@ export default function Attendance() {
       }
 
       const res = await api.attendanceImageBase64(payload)
+      const capturePreview = res?.preview_image_base64
+        ? {
+          imageBase64: res.preview_image_base64,
+          bbox: Array.isArray(res.detection_bbox) ? res.detection_bbox : null,
+          faceCount: Number.isFinite(Number(res.face_count)) ? Number(res.face_count) : null,
+        }
+        : null
+      setLastCapturePreview(capturePreview)
+
       if (res.success) {
         setAttendanceFeedback({
           type: 'success',
@@ -438,11 +1046,37 @@ export default function Attendance() {
 
   const showActiveCameraWarning = cameraRunning && activeCameraId && selectedCameraId && activeCameraId !== selectedCameraId
   const previewMirror = !!selectedCamera?.camera_options?.preview_mirror
+  const activeBrowserDeviceLabel = browserDevices.find(item => item.id === selectedBrowserDeviceId)?.label || ''
+  const liveOverlayBoxes = useMemo(() => {
+    if (!liveDetections.length) return []
+
+    return liveDetections
+      .map((detection, index) => {
+        const rect = projectDetectionBoxToPreview(
+          detection,
+          liveDetectionFrame,
+          previewViewport,
+          previewMirror,
+        )
+        if (!rect) return null
+
+        const label = detection?.matched && detection?.name && detection.name !== 'Unknown'
+          ? detection.name
+          : 'Face'
+
+        return {
+          id: `${index}-${(detection?.bbox || []).join('-')}`,
+          rect,
+          label,
+        }
+      })
+      .filter(Boolean)
+  }, [liveDetections, liveDetectionFrame, previewViewport, previewMirror])
 
   return (
-    <div className="grid xl:grid-cols-[1.1fr_0.9fr] gap-6">
+    <div className="grid xl:grid-cols-[1.1fr_0.9fr] gap-4 lg:gap-6">
       <div className="bg-white rounded-2xl shadow-sm border border-slate-200/60 overflow-hidden">
-        <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between gap-3 flex-wrap">
+        <div className="px-4 sm:px-5 py-4 border-b border-slate-100 flex items-center justify-between gap-3 flex-wrap">
           <div>
             <h1 className="text-2xl font-bold text-slate-800 tracking-tight">Điểm danh</h1>
             <p className="text-sm text-slate-500 mt-1">
@@ -459,8 +1093,15 @@ export default function Attendance() {
           </div>
         </div>
 
-        <div className="p-5 space-y-4">
-          <div className="overflow-hidden rounded-2xl border border-slate-200 bg-slate-950 aspect-video">
+        <div className="p-4 sm:p-5 space-y-4">
+          <div
+            ref={previewContainerRef}
+            className={`relative overflow-hidden rounded-2xl border border-slate-200 bg-slate-950 ${
+              browserCameraSelected
+                ? 'aspect-[3/4] min-h-[420px] max-h-[78vh] sm:aspect-[4/5] sm:min-h-[520px] lg:aspect-video lg:min-h-0 lg:max-h-none'
+                : 'aspect-video'
+            }`}
+          >
             {cameraRunning && cameraRuntimeMode === 'backend' ? (
               <img
                 ref={imgRef}
@@ -475,7 +1116,7 @@ export default function Attendance() {
                 autoPlay
                 muted
                 playsInline
-                className="w-full h-full object-cover"
+                className={`w-full h-full ${browserCameraSelected ? 'object-contain' : 'object-cover'}`}
                 style={{ transform: previewMirror ? 'scaleX(-1)' : 'none' }}
               />
             ) : (
@@ -485,15 +1126,70 @@ export default function Attendance() {
                   : 'Bật camera để xem luồng hình trực tiếp'}
               </div>
             )}
+
+            {browserCameraSelected && cameraRunning && cameraRuntimeMode === 'browser' && (
+              <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+                <div className="w-[70%] h-[72%] max-w-[360px] rounded-[36%] border-2 border-white/70 shadow-[0_0_0_9999px_rgba(2,6,23,0.22)]" />
+              </div>
+            )}
+
+            {browserCameraSelected && cameraRunning && cameraRuntimeMode === 'browser' && liveOverlayBoxes.length > 0 && (
+              <div className="pointer-events-none absolute inset-0">
+                {liveOverlayBoxes.map(box => (
+                  <div
+                    key={box.id}
+                    className="absolute border-2 border-emerald-400/95 rounded-xl bg-emerald-400/10"
+                    style={{
+                      left: `${box.rect.left}px`,
+                      top: `${box.rect.top}px`,
+                      width: `${box.rect.width}px`,
+                      height: `${box.rect.height}px`,
+                    }}
+                  >
+                    <span className="absolute -top-6 left-0 px-2 py-0.5 rounded-md text-[11px] font-semibold bg-emerald-500/90 text-white whitespace-nowrap">
+                      {box.label}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
 
-          <canvas ref={canvasRef} className="hidden" />
+          {browserCameraSelected && cameraRunning && cameraRuntimeMode === 'browser' && (
+            <div className="flex items-center gap-2 flex-wrap">
+              <button
+                onClick={captureBrowserAttendance}
+                disabled={attendanceBusy}
+                className="w-full sm:w-auto px-4 py-2.5 bg-emerald-600 text-white rounded-xl text-sm font-semibold hover:bg-emerald-700 disabled:opacity-50 transition-colors shadow-sm"
+              >
+                {attendanceBusy ? 'Đang nhận diện...' : 'Chụp và điểm danh'}
+              </button>
+              <span className="text-xs text-slate-500">Đặt khuôn mặt gọn trong vùng bo tròn rồi bấm chụp.</span>
+            </div>
+          )}
 
-          <div className="grid md:grid-cols-[1fr_auto_auto] gap-3 items-center">
+          {browserCameraSelected && (
+            <p className="text-xs sm:text-sm text-slate-500">
+              Khung preview trên điện thoại đã chuyển sang tỉ lệ dọc. Hãy giữ toàn bộ khuôn mặt nằm trong vùng bo tròn để tăng độ chính xác khi chụp điểm danh.
+            </p>
+          )}
+
+          {browserCameraSelected && cameraRunning && cameraRuntimeMode === 'browser' && (
+            <div className="rounded-xl border border-emerald-100 bg-emerald-50/70 px-3 py-2 text-xs sm:text-sm text-emerald-700 flex flex-wrap items-center gap-x-4 gap-y-1">
+              <span>Realtime detect: {liveDetections.length} khuôn mặt</span>
+              <span>Refresh: ~{(LIVE_DETECT_INTERVAL_MS / 1000).toFixed(1)}s</span>
+              {liveDetectionError && <span className="text-red-600">{liveDetectionError}</span>}
+            </div>
+          )}
+
+          <canvas ref={canvasRef} className="hidden" />
+          <canvas ref={detectCanvasRef} className="hidden" />
+
+          <div className="grid sm:grid-cols-2 xl:grid-cols-[1fr_auto_auto] gap-3 items-center">
             <select
               value={selectedCameraId}
               onChange={event => setSelectedCameraId(event.target.value)}
-              className="px-3 py-2.5 border border-slate-200 rounded-xl text-sm bg-white focus:ring-2 focus:ring-primary-500/20 focus:border-primary-400 transition-all"
+              className="sm:col-span-2 xl:col-span-1 px-3 py-2.5 border border-slate-200 rounded-xl text-sm bg-white focus:ring-2 focus:ring-primary-500/20 focus:border-primary-400 transition-all"
             >
               <option value="">-- Chọn camera --</option>
               {cameras.map(item => (
@@ -507,7 +1203,7 @@ export default function Attendance() {
               <button
                 onClick={handleStartCamera}
                 disabled={cameraLoading || !selectedCamera}
-                className="px-4 py-2.5 bg-primary-600 text-white rounded-xl text-sm font-semibold hover:bg-primary-700 disabled:opacity-50 transition-colors shadow-sm"
+                className="w-full sm:w-auto px-4 py-2.5 bg-primary-600 text-white rounded-xl text-sm font-semibold hover:bg-primary-700 disabled:opacity-50 transition-colors shadow-sm"
               >
                 {cameraLoading ? 'Đang bật...' : 'Bật camera'}
               </button>
@@ -515,7 +1211,7 @@ export default function Attendance() {
               <button
                 onClick={handleStopCamera}
                 disabled={cameraLoading}
-                className="px-4 py-2.5 bg-red-500 text-white rounded-xl text-sm font-semibold hover:bg-red-600 disabled:opacity-50 transition-colors shadow-sm"
+                className="w-full sm:w-auto px-4 py-2.5 bg-red-500 text-white rounded-xl text-sm font-semibold hover:bg-red-600 disabled:opacity-50 transition-colors shadow-sm"
               >
                 {cameraLoading ? 'Đang tắt...' : 'Tắt camera'}
               </button>
@@ -523,25 +1219,52 @@ export default function Attendance() {
 
             <Link
               to="/cameras"
-              className="px-4 py-2.5 bg-slate-100 text-slate-700 rounded-xl text-sm font-semibold hover:bg-slate-200 transition-colors text-center"
+              className="w-full sm:w-auto px-4 py-2.5 bg-slate-100 text-slate-700 rounded-xl text-sm font-semibold hover:bg-slate-200 transition-colors text-center"
             >
               Quản lý camera
             </Link>
           </div>
 
           {browserCameraSelected && (
-            <div className="rounded-xl border border-blue-100 bg-blue-50/70 px-4 py-3 text-sm text-blue-700 space-y-2">
+            <div className="rounded-xl border border-blue-100 bg-blue-50/70 px-4 py-3 text-sm text-blue-700 space-y-3">
               <p>
                 Camera này hoạt động trực tiếp trên thiết bị đang mở trang điểm danh. Phù hợp cho webcam laptop hoặc camera điện thoại khi dùng webview.
               </p>
-              {!browserCameraSupported && (
+              {browserCameraSupported && (
+                <div className="grid sm:grid-cols-[1fr_auto] gap-2">
+                  <select
+                    value={selectedBrowserDeviceId}
+                    onChange={event => handleBrowserDeviceChange(event.target.value)}
+                    className="w-full px-3 py-2 border border-blue-200 rounded-xl text-sm bg-white text-slate-700"
+                  >
+                    <option value="">Tự chọn camera theo thiết bị</option>
+                    {browserDevices.map(device => (
+                      <option key={device.id} value={device.id}>{device.label}</option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    onClick={() => loadBrowserDevices({ withPermission: true })}
+                    disabled={browserDevicesLoading}
+                    className="px-3 py-2 rounded-xl bg-white border border-blue-200 text-blue-700 text-sm font-medium hover:bg-blue-100 disabled:opacity-50"
+                  >
+                    {browserDevicesLoading ? 'Đang quét...' : 'Quét camera'}
+                  </button>
+                </div>
+              )}
+              {selectedBrowserDeviceId && (
+                <p className="text-xs text-blue-800">
+                  Đang ưu tiên camera cố định: {activeBrowserDeviceLabel || selectedBrowserDeviceId}
+                </p>
+              )}
+              {!browserCameraSupported && !requiresSecureContext && (
                 <p className="text-red-600">
-                  Trình duyệt hoặc webview hiện tại chưa hỗ trợ `getUserMedia`, nên không thể mở camera trực tiếp.
+                  Trình duyệt hoặc webview hiện tại chưa hỗ trợ mở camera trực tiếp bằng getUserMedia.
                 </p>
               )}
               {requiresSecureContext && (
                 <p className="text-amber-700">
-                  Một số trình duyệt di động chỉ cho mở camera khi chạy trong HTTPS hoặc webview đã cấp quyền camera.
+                  Thiết bị đang mở bằng HTTP theo IP LAN. iPhone/WebView có thể chặn camera live; hãy bật HTTPS để mở camera trình duyệt.
                 </p>
               )}
             </div>
@@ -560,6 +1283,11 @@ export default function Attendance() {
                       : 'Camera trước'}
                 </p>
               )}
+              {browserCameraSelected && selectedBrowserDeviceId && (
+                <p>
+                  Thiết bị cố định: {activeBrowserDeviceLabel || selectedBrowserDeviceId}
+                </p>
+              )}
             </div>
           ) : (
             <div className="rounded-xl border border-dashed border-slate-200 px-4 py-4 text-sm text-slate-400">
@@ -573,16 +1301,6 @@ export default function Attendance() {
             </div>
           )}
 
-          {browserCameraSelected && cameraRunning && cameraRuntimeMode === 'browser' && (
-            <button
-              onClick={captureBrowserAttendance}
-              disabled={attendanceBusy}
-              className="w-full md:w-auto px-4 py-2.5 bg-emerald-600 text-white rounded-xl text-sm font-semibold hover:bg-emerald-700 disabled:opacity-50 transition-colors shadow-sm"
-            >
-              {attendanceBusy ? 'Đang nhận diện...' : 'Chụp và điểm danh'}
-            </button>
-          )}
-
           {attendanceFeedback && (
             <div className={`rounded-xl px-4 py-3 text-sm border ${
               attendanceFeedback.type === 'success'
@@ -593,6 +1311,23 @@ export default function Attendance() {
               {attendanceFeedback.detail && (
                 <p className="mt-1 opacity-80">{attendanceFeedback.detail}</p>
               )}
+            </div>
+          )}
+
+          {browserCameraSelected && lastCapturePreview?.imageBase64 && (
+            <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 space-y-2">
+              <p className="text-sm font-medium text-slate-700">Ảnh nhận diện lần chụp gần nhất (có bounding box)</p>
+              <img
+                src={lastCapturePreview.imageBase64}
+                alt="Detection preview"
+                className="w-full max-h-56 object-contain rounded-lg border border-slate-200 bg-black"
+              />
+              <div className="text-xs text-slate-500 flex items-center justify-between gap-2">
+                <span>Bounding box hiện hiển thị trên ảnh chụp gửi nhận diện.</span>
+                {Number.isFinite(lastCapturePreview.faceCount) && (
+                  <span>Faces: {lastCapturePreview.faceCount}</span>
+                )}
+              </div>
             </div>
           )}
         </div>

@@ -11,7 +11,7 @@ header("Access-Control-Allow-Origin: *");
 header("Access-Control-Allow-Methods: POST, GET, OPTIONS");
 
 // Cho phép các header custom (như Content-Type)
-header("Access-Control-Allow-Headers: Content-Type, Authorization, SOF-User-Token");
+header("Access-Control-Allow-Headers: Content-Type, Authorization, SOF-User-Token, X-SOF-USER-TOKEN, X-USER-TOKEN, X-USER-CODE, X-USER-USERNAME, X-DATABASE, X-SERVER-IP");
 
 // Nếu là request OPTIONS (preflight), trả về sớm
 if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
@@ -349,6 +349,75 @@ switch ($vtable) {
 		switch ($vfun) {
 			case "data":
 				$vOutput = $hr_lv0020->getNhanVien();
+				break;
+			case "updateImageToken":
+				$lv001 = $input['lv001'] ?? $_POST['lv001'] ?? "";
+				$tokenAnh = $input['tokenAnh'] ?? $_POST['tokenAnh'] ?? "";
+				$cot = $input['cot'] ?? $_POST['cot'] ?? "lv007";
+
+				$lv001 = trim((string)$lv001);
+				$tokenAnh = trim((string)$tokenAnh);
+				$cot = trim((string)$cot);
+
+				if ($lv001 === "") {
+					$vOutput = array('success' => false, 'message' => 'Thiếu mã nhân viên');
+					break;
+				}
+				if ($tokenAnh === "") {
+					$vOutput = array('success' => false, 'message' => 'Thiếu token ảnh');
+					break;
+				}
+				if (!preg_match('/^lv[0-9]{3}$/', $cot)) {
+					$vOutput = array('success' => false, 'message' => 'Tên cột không hợp lệ');
+					break;
+				}
+
+				$db = db_connect();
+				if (!$db) {
+					$vOutput = array('success' => false, 'message' => 'Không kết nối được cơ sở dữ liệu');
+					break;
+				}
+
+				$lv001Esc = mysqli_real_escape_string($db, $lv001);
+				$tokenEsc = mysqli_real_escape_string($db, $tokenAnh);
+				$sql = "UPDATE hr_lv0020 SET {$cot}='{$tokenEsc}' WHERE lv001='{$lv001Esc}'";
+				$result = db_query($sql);
+				if (!$result) {
+					$vOutput = array('success' => false, 'message' => 'Lỗi cập nhật token ảnh: ' . sof_error());
+					break;
+				}
+
+				$affectedRows = mysqli_affected_rows($db);
+				if ($affectedRows <= 0) {
+					$checkSql = "SELECT lv001 FROM hr_lv0020 WHERE lv001='{$lv001Esc}' LIMIT 1";
+					$checkResult = db_query($checkSql);
+					if (!$checkResult || mysqli_num_rows($checkResult) <= 0) {
+						$vOutput = array('success' => false, 'message' => 'Không tìm thấy nhân viên trong ERP');
+						break;
+					}
+
+					$vOutput = array(
+						'success' => true,
+						'employee_id' => $lv001,
+						'image_token' => $tokenAnh,
+						'affected_rows' => 0,
+						'unchanged' => true,
+						'table' => 'hr_lv0020',
+						'column' => $cot,
+					);
+					break;
+				}
+
+				$vOutput = array(
+					'success' => true,
+					'employee_id' => $lv001,
+					'image_token' => $tokenAnh,
+					'affected_rows' => (int)$affectedRows,
+					'unchanged' => false,
+					'table' => 'hr_lv0020',
+					'column' => $cot,
+				);
+				break;
 		}
 		break;
 

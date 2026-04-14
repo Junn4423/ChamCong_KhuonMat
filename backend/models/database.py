@@ -2,6 +2,7 @@ from flask_sqlalchemy import SQLAlchemy
 from datetime import datetime
 import pickle
 import numpy as np
+from sqlalchemy import inspect, text
 
 db = SQLAlchemy()
 
@@ -91,3 +92,30 @@ class AttendanceLocation(db.Model):
 
     def __repr__(self):
         return f'<AttendanceLocation attendance={self.attendance_id} lat={self.latitude} lng={self.longitude}>'
+
+
+class EmployeeImage(db.Model):
+    __tablename__ = 'employee_images'
+
+    id = db.Column(db.Integer, primary_key=True)
+    employee_id = db.Column(db.String(50), unique=True, nullable=False, index=True)
+    image_token = db.Column(db.String(96), unique=True, nullable=False, index=True)
+    erp_image_token = db.Column(db.String(128), index=True)
+    image_blob = db.Column(db.LargeBinary)
+    mime_type = db.Column(db.String(64), default='image/jpeg')
+    source = db.Column(db.String(32), default='local')
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def __repr__(self):
+        return f'<EmployeeImage employee_id={self.employee_id} token={self.image_token}>'
+
+
+def ensure_database_schema():
+    inspector = inspect(db.engine)
+    if 'employee_images' not in inspector.get_table_names():
+        return
+
+    columns = {column['name'] for column in inspector.get_columns('employee_images')}
+    with db.engine.begin() as connection:
+        if 'erp_image_token' not in columns:
+            connection.execute(text('ALTER TABLE employee_images ADD COLUMN erp_image_token VARCHAR(128)'))

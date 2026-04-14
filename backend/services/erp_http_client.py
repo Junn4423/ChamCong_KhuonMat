@@ -5,37 +5,119 @@ from __future__ import annotations
 
 import json
 import mimetypes
+import base64
+import secrets
+import string
 import uuid
 from urllib import parse, request
 from urllib.error import HTTPError, URLError
 from urllib.parse import urljoin, urlparse
 
 from backend.config import (
+    ERP_COUCHDB_DB,
+    ERP_COUCHDB_HOST,
+    ERP_COUCHDB_LOG_DOC_ID,
+    ERP_COUCHDB_PASSWORD,
+    ERP_COUCHDB_PORT,
+    ERP_COUCHDB_USER,
+    ERP_COUCHDB_USER_TABLE,
+    ERP_HTTP_DEVICE_TYPE,
     ERP_HTTP_IMAGE_COLUMN,
     ERP_HTTP_LOGIN_URL,
+    ERP_HTTP_TOKEN_IMAGE_MODE,
+    ERP_HTTP_TOKEN_IMAGE_PROD_BASE_URL,
+    ERP_HTTP_TOKEN_IMAGE_TEST_BASE_URL,
+    ERP_HTTP_TOKEN_REGISTER_URL,
+    ERP_HTTP_TOKEN_REGISTER_USERNAME,
+    ERP_HTTP_TOKEN_REGISTER_API_TOKEN,
+    ERP_HTTP_TOKEN_COLUMN,
+    ERP_HTTP_SOF_DEV_TOKEN,
     ERP_HTTP_SERVICE_URL,
     ERP_HTTP_TIMEOUT,
+    ERP_HTTP_TYPE_CODE,
+    ERP_MAIN_CONFIG,
 )
-
-
-class ERPServiceError(Exception):
-    """Raised when an ERP HTTP service call fails."""
-
-    def __init__(self, message, status_code=None, payload=None):
-        super().__init__(message)
-        self.message = message
-        self.status_code = status_code
-        self.payload = payload
+from backend.services.couchdb_auth_service import CouchDBDynamicAuthService
+from backend.services.errors import ERPServiceError
 
 
 class ERPHttpClient:
-    def __init__(self, service_url=None, login_url=None, timeout=None, image_column=None):
+    def __init__(
+        self,
+        service_url=None,
+        login_url=None,
+        timeout=None,
+        image_column=None,
+        sof_dev_token=None,
+        type_code=None,
+        device_type=None,
+        couchdb_host=None,
+        couchdb_port=None,
+        couchdb_db=None,
+        couchdb_user_table=None,
+        couchdb_user=None,
+        couchdb_password=None,
+        token_image_mode=None,
+        token_image_prod_base_url=None,
+        token_image_test_base_url=None,
+        token_register_url=None,
+        token_register_username=None,
+        token_register_api_token=None,
+        token_column=None,
+    ):
         self.service_url = service_url or ERP_HTTP_SERVICE_URL
         self.login_url = login_url or ERP_HTTP_LOGIN_URL
         self.timeout = timeout or ERP_HTTP_TIMEOUT
         self.image_column = image_column or ERP_HTTP_IMAGE_COLUMN
+        self.sof_dev_token = (sof_dev_token or ERP_HTTP_SOF_DEV_TOKEN or '').strip()
+        self.type_code = (type_code or ERP_HTTP_TYPE_CODE or '').strip()
+        self.device_type = (device_type or ERP_HTTP_DEVICE_TYPE or 'web').strip()
+        self.couchdb_host = (couchdb_host or ERP_COUCHDB_HOST or '').strip()
+        self.couchdb_port = int(couchdb_port or ERP_COUCHDB_PORT or 5984)
+        self.couchdb_db = (couchdb_db or ERP_COUCHDB_DB or '').strip()
+        self.couchdb_user_table = (couchdb_user_table or ERP_COUCHDB_USER_TABLE or 'lv_lv0066').strip()
+        self.couchdb_user = (couchdb_user or ERP_COUCHDB_USER or '').strip()
+        self.couchdb_password = (couchdb_password or ERP_COUCHDB_PASSWORD or '').strip()
+        self.couchdb_log_doc_id = (ERP_COUCHDB_LOG_DOC_ID or 'logs').strip()
+        self.token_image_mode = (token_image_mode or ERP_HTTP_TOKEN_IMAGE_MODE or 'test').strip().lower()
+        self.token_image_prod_base_url = (
+            token_image_prod_base_url
+            or ERP_HTTP_TOKEN_IMAGE_PROD_BASE_URL
+            or 'https://sof.com.vn/loadimage'
+        ).strip().rstrip('/')
+        self.token_image_test_base_url = (
+            token_image_test_base_url
+            or ERP_HTTP_TOKEN_IMAGE_TEST_BASE_URL
+            or 'http://192.168.1.87/token'
+        ).strip().rstrip('/')
+        self.token_register_url = (
+            token_register_url
+            or ERP_HTTP_TOKEN_REGISTER_URL
+            or 'http://192.168.1.87/createtoken/index.php'
+        ).strip()
+        self.token_register_username = (
+            token_register_username
+            or ERP_HTTP_TOKEN_REGISTER_USERNAME
+            or 'admin'
+        ).strip()
+        self.token_register_api_token = (
+            token_register_api_token
+            or ERP_HTTP_TOKEN_REGISTER_API_TOKEN
+            or ''
+        ).strip()
+        self.token_column = (token_column or ERP_HTTP_TOKEN_COLUMN or 'lv007').strip()
         self.service_dir_url = self.service_url.rsplit('/', 1)[0] + '/'
         self.load_image_url = urljoin(self.service_dir_url, 'loadAnh.php')
+        self.couchdb_auth_service = CouchDBDynamicAuthService(
+            host=self.couchdb_host,
+            port=self.couchdb_port,
+            database=self.couchdb_db,
+            user_table=self.couchdb_user_table,
+            username=self.couchdb_user,
+            password=self.couchdb_password,
+            timeout=self.timeout,
+            log_doc_id=self.couchdb_log_doc_id,
+        )
 
     def capabilities(self):
         return {
@@ -47,44 +129,227 @@ class ERPHttpClient:
             'attendance_http_api': False,
         }
 
-    def login(self, username, password):
-        payload = {
-            'txtUserName': (username or '').strip(),
-            'txtPassword': password or '',
-        }
-        if not payload['txtUserName'] or not payload['txtPassword']:
+    def login(self, username, password, client_ip='', client_mac=''):
+        username = (username or '').strip()
+        password = password or ''
+        if not username or not password:
             raise ERPServiceError('Vui long nhap tai khoan va mat khau ERP', status_code=400)
 
-        response = self._post_json(self.login_url, payload)
-        if not isinstance(response, dict):
-            raise ERPServiceError('ERP tra ve du lieu dang nhap khong hop le')
-
-        code = (response.get('code') or '').strip()
-        token = (response.get('token') or '').strip()
-        if not code or not token:
-            raise ERPServiceError(
-                response.get('message') or 'Dang nhap ERP that bai',
-                status_code=401,
-                payload=response,
+        # Source of truth for credential check: CouchDB lv_lv0066 user document.
+        couch_auth = None
+        couch_auth_error = None
+        try:
+            couch_auth = self.couchdb_auth_service.authenticate_user(
+                username,
+                password,
+                device_type=self.device_type,
+                type_code=self.type_code,
             )
+        except ERPServiceError as exc:
+            couch_auth_error = exc
+            if exc.status_code and exc.status_code < 500:
+                raise
 
-        return {
-            'code': code,
-            'token': token,
-            'userid': response.get('userid', ''),
-            'department': response.get('department', ''),
-            'role': response.get('role', ''),
-            'name': response.get('name', ''),
+        base_payload = {
+            'txtUserName': username,
+            'txtPassword': password,
         }
+
+        login_payload = dict(base_payload)
+        if self.device_type:
+            login_payload['txtDeviceType'] = self.device_type
+        if self.type_code:
+            login_payload['txtTypeCode'] = self.type_code
+
+        payload_attempts = [login_payload]
+        if login_payload != base_payload:
+            payload_attempts.append(base_payload)
+
+        response = None
+        last_error = None
+        for attempt_payload in payload_attempts:
+            try:
+                candidate = self._post_json(
+                    self.login_url,
+                    attempt_payload,
+                    headers=self._build_gateway_headers(),
+                )
+            except ERPServiceError as exc:
+                last_error = exc
+                continue
+
+            if isinstance(candidate, dict):
+                candidate_code = (candidate.get('code') or '').strip()
+                candidate_token = (candidate.get('token') or '').strip()
+                if candidate_code and candidate_token:
+                    response = candidate
+                    break
+                response = candidate
+                continue
+
+            response = candidate
+
+        if isinstance(response, dict):
+            code = (response.get('code') or '').strip()
+            token = (response.get('token') or '').strip()
+            if code and token:
+                merged = self._merge_login_payload(couch_auth, response, token_source='gateway')
+                self._sync_couchdb_post_login(
+                    username=username,
+                    auth_payload=merged,
+                    client_ip=client_ip,
+                    client_mac=client_mac,
+                    login_password=password,
+                )
+                if couch_auth_error and not couch_auth:
+                    merged['couchdb_warning'] = couch_auth_error.message
+                return merged
+
+        # Gateway token endpoint may fail by app TypeCode/device policy; keep CouchDB-auth login available.
+        if couch_auth:
+            merged = self._merge_login_payload(couch_auth, {}, token_source='couchdb_direct')
+            self._sync_couchdb_post_login(
+                username=username,
+                auth_payload=merged,
+                client_ip=client_ip,
+                client_mac=client_mac,
+                login_password=password,
+            )
+            return merged
+
+        if isinstance(response, dict):
+            message = (
+                response.get('message')
+                or response.get('error')
+                or response.get('reason')
+                or ''
+            )
+            if message:
+                raise ERPServiceError(str(message), status_code=401, payload=response)
+
+        if last_error:
+            raise last_error
+        if couch_auth_error:
+            raise couch_auth_error
+        raise ERPServiceError('Dang nhap that bai', status_code=401)
+
+    @staticmethod
+    def _generate_local_token(length=32):
+        alphabet = string.ascii_letters + string.digits
+        return ''.join(secrets.choice(alphabet) for _ in range(max(8, int(length))))
+
+    def _sync_couchdb_post_login(self, username, auth_payload, client_ip='', client_mac='', login_password=''):
+        if not isinstance(auth_payload, dict):
+            return
+
+        token = str(auth_payload.get('token') or '').strip()
+        if not token:
+            return
+
+        sync_warnings = []
+        try:
+            self.couchdb_auth_service.save_token(
+                username=username,
+                token=token,
+                device_type=self.device_type,
+                login_password=login_password,
+            )
+        except ERPServiceError as exc:
+            sync_warnings.append(f'save_token: {exc.message}')
+
+        try:
+            self.couchdb_auth_service.write_auth_log(
+                username=username,
+                status=0,
+                device_type=self.device_type,
+                token=token,
+                ip=client_ip,
+                mac=client_mac,
+            )
+        except ERPServiceError as exc:
+            sync_warnings.append(f'write_auth_log: {exc.message}')
+
+        if sync_warnings:
+            auth_payload['couchdb_sync_warning'] = '; '.join(sync_warnings)
+
+    def logout(self, auth, client_ip='', client_mac=''):
+        auth = auth or {}
+        username = str(auth.get('code') or '').strip()
+        if not username:
+            return
+
+        device_type = str(auth.get('device_type') or self.device_type or 'web').strip().lower()
+        token = str(auth.get('token') or '').strip()
+
+        try:
+            self.couchdb_auth_service.remove_token(
+                username=username,
+                device_type=device_type,
+            )
+        except ERPServiceError:
+            pass
+
+        try:
+            self.couchdb_auth_service.write_auth_log(
+                username=username,
+                status=1,
+                device_type=device_type,
+                token=token,
+                ip=client_ip,
+                mac=client_mac,
+            )
+        except ERPServiceError:
+            pass
+
+    def _merge_login_payload(self, couch_auth, response, token_source):
+        merged = dict(couch_auth or {})
+        response = response if isinstance(response, dict) else {}
+
+        for key in (
+            'code',
+            'token',
+            'userid',
+            'department',
+            'role',
+            'name',
+            'domain',
+            'method',
+            'database',
+            'IPv4',
+            'lv006',
+            'lv900',
+            'lv705',
+            'lv667',
+            'lv040',
+            'quota_exceeded',
+            'quota_message',
+            'storage_info',
+        ):
+            value = response.get(key)
+            if value not in (None, ''):
+                merged[key] = value
+
+        merged['code'] = (merged.get('code') or '').strip()
+        merged['token'] = (merged.get('token') or '').strip() or self._generate_local_token(32)
+        merged['device_type'] = self.device_type
+        merged['type_code'] = self.type_code
+        merged['token_source'] = token_source
+        merged['quota_exceeded'] = bool(merged.get('quota_exceeded', False))
+        if not isinstance(merged.get('storage_info'), dict):
+            merged['storage_info'] = {}
+        return merged
 
     def list_employees(self, auth):
         employees = []
         errors = []
+        service_headers = self._build_service_headers(auth)
 
-        for func_name in ('LayNhanVien', 'data'):
+        # Prefer `data` because some deployments return reduced columns on `LayNhanVien`
+        # (missing lv007/image token), while `data` keeps full employee fields.
+        for func_name in ('data', 'LayNhanVien'):
             try:
                 payload = self._build_auth_payload(auth, table='hr_lv0020', func=func_name)
-                response = self._post_json(self.service_url, payload)
+                response = self._post_json(self.service_url, payload, headers=service_headers)
                 if self._is_invalid_session_response(response):
                     raise ERPServiceError(
                         'Phien lam viec ERP da het han, vui long dang nhap lai',
@@ -118,7 +383,11 @@ class ERPHttpClient:
                 func='layNhanVienTheoMa',
                 maNhanVien=employee_id,
             )
-            response = self._post_json(self.service_url, payload)
+            response = self._post_json(
+                self.service_url,
+                payload,
+                headers=self._build_service_headers(auth),
+            )
             if self._is_invalid_session_response(response):
                 raise ERPServiceError('Phien lam viec ERP da het han, vui long dang nhap lai', status_code=401)
             matches = self._map_employees(response)
@@ -127,7 +396,14 @@ class ERPHttpClient:
                 raise
             direct_error = exc
 
-        if not matches or not (matches[0].get('image_ref') or '').strip():
+        if (
+            not matches
+            or not (
+                (matches[0].get('image_ref') or '').strip()
+                or (matches[0].get('image_token') or '').strip()
+                or (matches[0].get('image_url') or '').strip()
+            )
+        ):
             try:
                 matches = [
                     emp for emp in self.list_employees(auth)
@@ -158,31 +434,23 @@ class ERPHttpClient:
             'phone': (employee.get('phone') or '').strip(),
             'position': (employee.get('position') or '').strip(),
             'image_ref': (employee.get('image_ref') or '').strip(),
+            'image_token': (employee.get('image_token') or '').strip(),
+            'image_url': (employee.get('image_url') or '').strip(),
         }
 
     def get_employee_profile_image(self, auth, employee_id, employee=None):
         employee = employee or self.get_employee(auth, employee_id)
         image_ref = (employee.get('image_ref') or '').strip()
+        image_token = self._extract_image_token(employee.get('image_token') or image_ref)
+        image_url = (employee.get('image_url') or '').strip()
+        if not image_url and image_token:
+            image_url = self._build_token_image_url(image_token)
         profile_error = None
 
-        for image_column in self._candidate_image_columns():
+        if image_url:
             try:
-                image_data = self.get_employee_image(auth, employee_id, image_column=image_column)
-                return {
-                    **image_data,
-                    'image_ref': image_ref,
-                    'source_url': None,
-                    'source': 'getAnh',
-                }
-            except ERPServiceError as exc:
-                if exc.status_code and exc.status_code != 404:
-                    profile_error = exc
-
-        if self._looks_like_image_ref(image_ref):
-            try:
-                url = self._build_employee_image_url(image_ref)
                 image_bytes, content_type = self._open(
-                    url,
+                    image_url,
                     headers={'Accept': 'image/*,*/*'},
                     method='GET',
                 )
@@ -209,6 +477,62 @@ class ERPHttpClient:
                     'bytes': image_bytes,
                     'content_type': content_type or 'image/jpeg',
                     'image_ref': image_ref,
+                    'image_token': image_token,
+                    'source_url': image_url,
+                    'source': 'token_url',
+                }
+            except ERPServiceError as exc:
+                profile_error = profile_error or exc
+
+        for image_column in self._candidate_image_columns():
+            try:
+                image_data = self.get_employee_image(auth, employee_id, image_column=image_column)
+                return {
+                    **image_data,
+                    'image_ref': image_ref,
+                    'image_token': image_token,
+                    'source_url': None,
+                    'source': 'getAnh',
+                }
+            except ERPServiceError as exc:
+                if exc.status_code and exc.status_code != 404:
+                    profile_error = exc
+
+        if self._looks_like_image_ref(image_ref):
+            try:
+                url = self._build_employee_image_url(image_ref)
+                image_bytes, content_type = self._open(
+                    url,
+                    headers={
+                        **self._build_service_headers(auth),
+                        'Accept': 'image/*,*/*',
+                    },
+                    method='GET',
+                )
+                if not image_bytes:
+                    raise ERPServiceError('Khong co du lieu anh tu ERP', status_code=404)
+
+                if len(image_bytes) == 7525088:
+                    import hashlib
+                    if hashlib.md5(image_bytes).hexdigest() == '309afa1bbe342e05345b7cca48a2c656':
+                        raise ERPServiceError('ERP tra ve anh chung mac dinh', status_code=404)
+
+                sniff = image_bytes[:256].lower()
+                if (
+                    b'khong tim thay anh' in sniff
+                    or b'image not found' in sniff
+                    or b'thieu tham so' in sniff
+                    or b'<html' in sniff
+                    or b'"message":"invalid"' in sniff
+                    or b'"error"' in sniff
+                ):
+                    raise ERPServiceError('Khong tim thay anh nhan vien trong ERP', status_code=404)
+
+                return {
+                    'bytes': image_bytes,
+                    'content_type': content_type or 'image/jpeg',
+                    'image_ref': image_ref,
+                    'image_token': image_token,
                     'source_url': url,
                     'source': 'loadAnh',
                 }
@@ -232,7 +556,12 @@ class ERPHttpClient:
             lv001=employee_id,
             cot=image_column or self.image_column,
         )
-        image_bytes, content_type = self._post_form(self.service_url, payload, expect_json=False)
+        image_bytes, content_type = self._post_form(
+            self.service_url,
+            payload,
+            expect_json=False,
+            headers=self._build_service_headers(auth),
+        )
         if not image_bytes:
             raise ERPServiceError('Khong co du lieu anh tu ERP', status_code=404)
 
@@ -299,6 +628,7 @@ class ERPHttpClient:
             filename=filename,
             file_bytes=image_bytes,
             file_content_type=content_type,
+            headers=self._build_service_headers(auth),
         )
 
         if isinstance(response, dict):
@@ -308,6 +638,297 @@ class ERPHttpClient:
                 raise ERPServiceError(response.get('message') or 'ERP tu choi luu anh', payload=response)
 
         return response
+
+    def create_sof_image_token(self, image_bytes, username=None, auth=None):
+        if not image_bytes:
+            raise ERPServiceError('Thiếu dữ liệu ảnh để đăng ký token', status_code=400)
+        if not self.token_register_url:
+            raise ERPServiceError('Chưa cấu hình URL đăng ký TokenSOF', status_code=500)
+
+        token_username = (
+            username
+            or self._pick_auth_value(auth or {}, 'code', 'username', 'user')
+            or self.token_register_username
+            or 'admin'
+        ).strip() or 'admin'
+        encoded_image = base64.b64encode(image_bytes).decode('utf-8')
+        payload_attempts = (
+            ('json', {'username': token_username, 'ImgSOF': encoded_image}),
+            ('json', {'username': token_username, '_ImgSOF': encoded_image}),
+            ('form', {'username': token_username, '_ImgSOF': encoded_image}),
+        )
+        header_attempts = self._build_token_register_header_variants(token_username, auth=auth)
+
+        last_error = None
+        preferred_error = None
+        for request_type, payload in payload_attempts:
+            for headers in header_attempts:
+                try:
+                    if request_type == 'json':
+                        response = self._post_json(
+                            self.token_register_url,
+                            payload,
+                            headers=headers,
+                        )
+                    else:
+                        response = self._post_form(
+                            self.token_register_url,
+                            payload,
+                            headers=headers,
+                        )
+                except ERPServiceError as exc:
+                    last_error = exc
+                    preferred_error = self._pick_preferred_token_register_error(preferred_error, exc)
+                    continue
+
+                token_result = self._extract_token_register_result(response)
+                if token_result:
+                    return token_result
+
+                last_error = self._token_register_error_from_response(response)
+                preferred_error = self._pick_preferred_token_register_error(preferred_error, last_error)
+
+        if preferred_error:
+            raise preferred_error
+        if last_error:
+            raise last_error
+        raise ERPServiceError('Dang ky TokenSOF that bai', status_code=502)
+
+    def _extract_token_register_result(self, response):
+        if not isinstance(response, dict):
+            return None
+
+        token = str(
+            response.get('TokenSOF')
+            or response.get('token')
+            or response.get('tokenSOF')
+            or ''
+        ).strip()
+        if not token:
+            return None
+
+        status_text = str(response.get('Status') or response.get('status') or '').strip().lower()
+        is_success = bool(response.get('success'))
+        if response.get('success') is False and status_text not in {'success', 'ok'}:
+            return None
+        if status_text and status_text not in {'success', 'ok'} and not is_success:
+            return None
+
+        return {
+            'token': token,
+            'message': str(response.get('Message') or response.get('message') or 'OK').strip() or 'OK',
+            'raw': response,
+        }
+
+    @staticmethod
+    def _token_register_error_from_response(response):
+        if not isinstance(response, dict):
+            return ERPServiceError('Dịch vụ TokenSOF trả về dữ liệu không hợp lệ', status_code=502)
+
+        message = str(
+            response.get('Message')
+            or response.get('message')
+            or response.get('error')
+            or 'Đăng ký TokenSOF thất bại'
+        ).strip() or 'Đăng ký TokenSOF thất bại'
+
+        lowered = message.lower()
+        status_code = 401 if ('unauthorized' in lowered or 'forbidden' in lowered) else 502
+        return ERPServiceError(message, status_code=status_code, payload=response)
+
+    @staticmethod
+    def _unique_values(*values):
+        unique = []
+        for value in values:
+            text = str(value or '').strip()
+            if text and text not in unique:
+                unique.append(text)
+        return unique
+
+    def _build_token_register_header_variants(self, username, auth=None):
+        auth = auth or {}
+        auth_user_token = self._pick_auth_value(auth, 'token', 'api_token', 'user_token')
+
+        configured_user_token = (self.sof_dev_token or self.token_register_api_token or '').strip()
+        configured_admin_token = (self.token_register_api_token or '').strip()
+
+        variant_inputs = [
+            (auth_user_token, configured_admin_token),
+            (auth_user_token, ''),
+            (configured_user_token, configured_admin_token),
+            (configured_user_token, ''),
+            ((self.token_register_api_token or '').strip(), ''),
+            ('SOF2025DEVELOPER', 'SOF2025ADMIN'),
+            ('SOF2025DEVELOPER', ''),
+        ]
+
+        variants = []
+        seen = set()
+        for user_token, admin_token in variant_inputs:
+            user_token = (user_token or '').strip()
+            if not user_token:
+                continue
+            headers = self._build_token_register_headers(
+                username=username,
+                user_token=user_token,
+                admin_token=admin_token,
+            )
+            key = tuple(sorted(headers.items()))
+            if key in seen:
+                continue
+            seen.add(key)
+            variants.append(headers)
+
+        return variants
+
+    @staticmethod
+    def _pick_preferred_token_register_error(current_error, candidate_error):
+        if candidate_error is None:
+            return current_error
+        if current_error is None:
+            return candidate_error
+
+        def score(err):
+            message = str(getattr(err, 'message', '') or '').strip().lower()
+            status_code = int(getattr(err, 'status_code', 0) or 0)
+            value = 0
+            if status_code == 401 or 'unauthorized' in message or 'forbidden' in message:
+                value += 100
+            if 'missing header' in message:
+                value -= 20
+            return value
+
+        return candidate_error if score(candidate_error) >= score(current_error) else current_error
+
+    def update_employee_image_token(self, employee_id, image_token, auth=None):
+        employee_id = (employee_id or '').strip()
+        image_token = (image_token or '').strip()
+        if not employee_id:
+            raise ERPServiceError('Thiếu mã nhân viên', status_code=400)
+        if not image_token:
+            raise ERPServiceError('Thiếu token ảnh để đẩy lên ERP', status_code=400)
+
+        conn = None
+        cursor = None
+        last_direct_error = None
+        try:
+            import mysql.connector
+
+            conn = mysql.connector.connect(**ERP_MAIN_CONFIG)
+            cursor = conn.cursor()
+            cursor.execute(
+                f'UPDATE hr_lv0020 SET {self.token_column} = %s WHERE lv001 = %s',
+                (image_token, employee_id),
+            )
+            conn.commit()
+            affected_rows = int(cursor.rowcount or 0)
+            unchanged = False
+            if affected_rows <= 0:
+                cursor.execute('SELECT lv001 FROM hr_lv0020 WHERE lv001 = %s LIMIT 1', (employee_id,))
+                row = cursor.fetchone()
+                if not row:
+                    raise ERPServiceError(
+                        f'Không tìm thấy nhân viên trong ERP để cập nhật {self.token_column}',
+                        status_code=404,
+                    )
+                unchanged = True
+
+            return {
+                'success': True,
+                'employee_id': employee_id,
+                'image_token': image_token,
+                'affected_rows': affected_rows,
+                'unchanged': unchanged,
+                'table': 'hr_lv0020',
+                'column': self.token_column,
+                'database': str(ERP_MAIN_CONFIG.get('database') or ''),
+                'host': str(ERP_MAIN_CONFIG.get('host') or ''),
+                'method': 'direct_db',
+            }
+        except ERPServiceError:
+            raise
+        except Exception as exc:
+            last_direct_error = exc
+        finally:
+            if cursor is not None:
+                try:
+                    cursor.close()
+                except Exception:
+                    pass
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+
+        fallback_error = None
+        if auth:
+            try:
+                return self._update_employee_image_token_via_service(auth, employee_id, image_token)
+            except ERPServiceError as exc:
+                fallback_error = exc
+
+        if fallback_error is not None:
+            direct_message = str(last_direct_error or '').strip()
+            fallback_message = str(fallback_error.message or '').strip()
+            message = 'Không thể cập nhật token ảnh lên ERP'
+            if direct_message:
+                message = f'{message} (direct_db: {direct_message}'
+                if fallback_message:
+                    message = f'{message}; service: {fallback_message})'
+                else:
+                    message = f'{message})'
+            elif fallback_message:
+                message = f'{message} (service: {fallback_message})'
+            raise ERPServiceError(message, status_code=(fallback_error.status_code or 502), payload=fallback_error.payload)
+
+        raise ERPServiceError(f'Không thể cập nhật token ảnh lên ERP: {last_direct_error}', status_code=502) from last_direct_error
+
+    def _update_employee_image_token_via_service(self, auth, employee_id, image_token):
+        payload = self._build_auth_payload(
+            auth,
+            table='hr_lv0020',
+            func='updateImageToken',
+            lv001=employee_id,
+            tokenAnh=image_token,
+            cot=self.token_column,
+        )
+
+        response = self._post_json(
+            self.service_url,
+            payload,
+            headers=self._build_service_headers(auth),
+        )
+
+        if self._is_invalid_session_response(response):
+            raise ERPServiceError('Phiên làm việc ERP đã hết hạn, vui lòng đăng nhập lại', status_code=401, payload=response)
+        if not isinstance(response, dict):
+            raise ERPServiceError('ERP service updateImageToken trả về dữ liệu không hợp lệ', status_code=502)
+
+        ok = bool(response.get('success'))
+        status_text = str(response.get('status') or '').strip().lower()
+        if (not ok) or status_text in {'error', 'failed', 'fail'}:
+            raise ERPServiceError(
+                str(response.get('message') or response.get('error') or 'ERP service tu choi cap nhat token anh').strip(),
+                status_code=502,
+                payload=response,
+            )
+
+        affected_rows = int(response.get('affected_rows') or 0)
+        unchanged = bool(response.get('unchanged'))
+        return {
+            'success': True,
+            'employee_id': employee_id,
+            'image_token': image_token,
+            'affected_rows': affected_rows,
+            'unchanged': unchanged,
+            'table': 'hr_lv0020',
+            'column': self.token_column,
+            'database': str(response.get('database') or ''),
+            'host': str(response.get('host') or ''),
+            'method': 'service',
+            'raw': response,
+        }
 
     def _build_auth_payload(self, auth, **extra):
         auth = auth or {}
@@ -320,6 +941,80 @@ class ERPHttpClient:
             'code': code,
             'token': token,
         }
+
+    def _build_gateway_headers(self):
+        headers = {
+            'Accept': 'application/json',
+            'X-DEVICE-TYPE': self.device_type,
+        }
+        if self.sof_dev_token:
+            headers['X-SOF-USER-TOKEN'] = self.sof_dev_token
+            headers['SOF-User-Token'] = self.sof_dev_token
+        return headers
+
+    def _build_token_register_headers(self, username='', user_token='', admin_token=''):
+        headers = {
+            'Accept': 'application/json',
+            'X-DEVICE-TYPE': self.device_type,
+        }
+
+        user_token = (user_token or '').strip()
+        if user_token:
+            headers['X-SOF-USER-TOKEN'] = user_token
+            headers['SOF-User-Token'] = user_token
+            headers['SOF-USER-TOKEN'] = user_token
+            headers['Authorization'] = f'Bearer {user_token}'
+
+        admin_token = (admin_token or '').strip()
+        if admin_token:
+            headers['SOF-Token'] = admin_token
+            headers['SOF-TOKEN'] = admin_token
+
+        username = (username or '').strip()
+        if username:
+            headers['SOF-User'] = username
+            headers['Admin-Contact'] = username
+            headers['X-Admin-Contact'] = username
+
+        return headers
+
+    @staticmethod
+    def _pick_auth_value(auth, *keys):
+        for key in keys:
+            value = auth.get(key)
+            if value is None:
+                continue
+            text = str(value).strip()
+            if text:
+                return text
+        return ''
+
+    def _build_service_headers(self, auth):
+        auth = auth or {}
+        headers = self._build_gateway_headers()
+
+        user_token = self._pick_auth_value(auth, 'token')
+        if user_token:
+            headers['X-USER-TOKEN'] = user_token
+
+        database = self._pick_auth_value(auth, 'database')
+        if database:
+            headers['X-DATABASE'] = database
+
+        server_ip = self._pick_auth_value(auth, 'IPv4', 'server_ip')
+        if server_ip:
+            headers['X-SERVER-IP'] = server_ip
+
+        user_code = self._pick_auth_value(auth, 'code')
+        if user_code:
+            headers['X-USER-CODE'] = user_code
+            headers['X-USER-USERNAME'] = user_code
+
+        user_role = self._pick_auth_value(auth, 'role')
+        if user_role:
+            headers['X-USER-RIGHT'] = user_role
+
+        return headers
 
     @staticmethod
     def _is_invalid_session_response(value):
@@ -340,6 +1035,10 @@ class ERPHttpClient:
             employee_id = (item.get('employee_id') or item.get('maNhanVien') or item.get('lv001') or '').strip()
             if not employee_id:
                 continue
+            image_token = self._extract_image_token(item.get('image_token') or item.get('lv007'))
+            image_url = (item.get('image_url') or '').strip()
+            if not image_url and image_token:
+                image_url = self._build_token_image_url(image_token)
             employees.append({
                 'employee_id': employee_id,
                 'name': (
@@ -367,8 +1066,35 @@ class ERPHttpClient:
                     or item.get('lv007')
                     or ''
                 ).strip(),
+                'image_token': image_token,
+                'image_url': image_url,
             })
         return employees
+
+    @staticmethod
+    def _extract_image_token(value):
+        token = (value or '').strip()
+        if not token:
+            return ''
+        if len(token) < 12:
+            return ''
+        if any(ch.isspace() for ch in token):
+            return ''
+        if any(ch in token for ch in ('/', '\\', '?', '#', '&')):
+            return ''
+        return token
+
+    def _build_token_image_url(self, image_token):
+        token = self._extract_image_token(image_token)
+        if not token:
+            return ''
+
+        mode = 'prod' if self.token_image_mode == 'prod' else 'test'
+        base_url = self.token_image_prod_base_url if mode == 'prod' else self.token_image_test_base_url
+        if not base_url:
+            return ''
+
+        return f"{base_url}/{parse.quote(token, safe='')}"
 
     def _build_employee_image_url(self, image_ref):
         parsed = urlparse(image_ref)
@@ -402,30 +1128,45 @@ class ERPHttpClient:
             return [value]
         return []
 
-    def _post_json(self, url, payload):
+    def _post_json(self, url, payload, headers=None):
         body = json.dumps(payload).encode('utf-8')
+        request_headers = {
+            'Content-Type': 'application/json; charset=utf-8',
+            'Accept': 'application/json',
+        }
+        if headers:
+            request_headers.update(headers)
         raw, _ = self._open(
             url,
             data=body,
-            headers={
-                'Content-Type': 'application/json; charset=utf-8',
-                'Accept': 'application/json',
-            },
+            headers=request_headers,
         )
         return self._parse_json(raw)
 
-    def _post_form(self, url, payload, expect_json=True):
+    def _post_form(self, url, payload, expect_json=True, headers=None):
         body = parse.urlencode(payload).encode('utf-8')
+        request_headers = {'Content-Type': 'application/x-www-form-urlencoded'}
+        if headers:
+            request_headers.update(headers)
         raw, headers = self._open(
             url,
             data=body,
-            headers={'Content-Type': 'application/x-www-form-urlencoded'},
+            headers=request_headers,
         )
         if expect_json:
             return self._parse_json(raw)
         return raw, headers.get_content_type()
 
-    def _post_multipart(self, url, fields, file_field, filename, file_bytes, file_content_type):
+    def _post_multipart(
+        self,
+        url,
+        fields,
+        file_field,
+        filename,
+        file_bytes,
+        file_content_type,
+        headers=None,
+    ):
         boundary = f'----FaceCheckBoundary{uuid.uuid4().hex}'
         body = bytearray()
 
@@ -445,10 +1186,14 @@ class ERPHttpClient:
         body.extend(file_bytes)
         body.extend(f'\r\n--{boundary}--\r\n'.encode('utf-8'))
 
+        request_headers = {'Content-Type': f'multipart/form-data; boundary={boundary}'}
+        if headers:
+            request_headers.update(headers)
+
         raw, _ = self._open(
             url,
             data=bytes(body),
-            headers={'Content-Type': f'multipart/form-data; boundary={boundary}'},
+            headers=request_headers,
         )
         return self._parse_json(raw)
 

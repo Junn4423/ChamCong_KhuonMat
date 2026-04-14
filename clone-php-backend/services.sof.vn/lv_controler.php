@@ -4,6 +4,10 @@ Báº£ng quyá»�n ERPSOFV2R.com
 KhÃ´ng Ä‘Æ°á»£c sá»­a
 NgÃ y táº¡o:06/04/2007
 */
+if (file_exists(__DIR__ . '/couchdb_functions.php')) {
+	include_once(__DIR__ . '/couchdb_functions.php');
+}
+
 class lv_controler
 {
 	protected $isView = 0;
@@ -22,6 +26,7 @@ class lv_controler
 	protected $UserID = "";
 	protected $isLog = 1;
 	public $LV_UserID = "";
+	protected $ValidatedUserCode = "";
 	///////////Load max////////////
 	public $MaxRows = 0;
 	public $CurPage = 0;
@@ -39,41 +44,160 @@ class lv_controler
 	{
 		$this->UserID = $vUserID;
 		$this->isRight = $vCheckAdmin;
-		$inputJSON = file_get_contents('php://input');
-		$input = json_decode($inputJSON, true);
-		$code = isset($input['code']) ? $input['code'] : (isset($_POST['code']) ? $_POST['code'] : '');
-		$token = isset($input['token']) ? $input['token'] : (isset($_POST['token']) ? $_POST['token'] : '');
+		$auth = $this->Extract_Request_Auth();
+		$code = $auth['code'];
+		$token = $auth['token'];
 
 		if (!$this->CheckStaff_Valid($code, $token)) {
 			echo json_encode(['message' => 'invalid']);
 			exit();
 		}
-		$this->LV_UserID = $this->Get_User($vUserID, 'lv006');
-		$this->isAdd = $this->SetOnce($vCheckAdmin, $vUserID, $vright, "Add");
-		$this->isEdit = $this->SetOnce($vCheckAdmin, $vUserID, $vright, "Edit");
-		$this->isDel = $this->SetOnce($vCheckAdmin, $vUserID, $vright, "Del");
-		$this->isFil = $this->SetOnce($vCheckAdmin, $vUserID, $vright, "Fil");
-		$this->isRpt = $this->SetOnce($vCheckAdmin, $vUserID, $vright, "Rpt");
-		$this->isRel = $this->SetOnce($vCheckAdmin, $vUserID, $vright, "Rel");
-		$this->isHelp = $this->SetOnce($vCheckAdmin, $vUserID, $vright, "Help");
-		$this->isApr = $this->SetOnce($vCheckAdmin, $vUserID, $vright, "Apr");
-		$this->isUnApr = $this->SetOnce($vCheckAdmin, $vUserID, $vright, "UnApr");
-		$this->isView = $this->SetOnce($vCheckAdmin, $vUserID, $vright, "View");
-		$this->isConfig = $this->SetOnce($vCheckAdmin, $vUserID, $vright, "Config");
-		$this->isFKho = $this->SetOnce($vCheckAdmin, $vUserID, $vright, "FKho");
+
+		$effectiveUserID = trim((string)$vUserID);
+		if ($effectiveUserID == "") {
+			$effectiveUserID = $this->ValidatedUserCode != "" ? $this->ValidatedUserCode : $code;
+		}
+
+		$this->UserID = $effectiveUserID;
+		$this->LV_UserID = $effectiveUserID != "" ? $this->Get_User($effectiveUserID, 'lv006') : "";
+		$this->isAdd = $this->SetOnce($vCheckAdmin, $effectiveUserID, $vright, "Add");
+		$this->isEdit = $this->SetOnce($vCheckAdmin, $effectiveUserID, $vright, "Edit");
+		$this->isDel = $this->SetOnce($vCheckAdmin, $effectiveUserID, $vright, "Del");
+		$this->isFil = $this->SetOnce($vCheckAdmin, $effectiveUserID, $vright, "Fil");
+		$this->isRpt = $this->SetOnce($vCheckAdmin, $effectiveUserID, $vright, "Rpt");
+		$this->isRel = $this->SetOnce($vCheckAdmin, $effectiveUserID, $vright, "Rel");
+		$this->isHelp = $this->SetOnce($vCheckAdmin, $effectiveUserID, $vright, "Help");
+		$this->isApr = $this->SetOnce($vCheckAdmin, $effectiveUserID, $vright, "Apr");
+		$this->isUnApr = $this->SetOnce($vCheckAdmin, $effectiveUserID, $vright, "UnApr");
+		$this->isView = $this->SetOnce($vCheckAdmin, $effectiveUserID, $vright, "View");
+		$this->isConfig = $this->SetOnce($vCheckAdmin, $effectiveUserID, $vright, "Config");
+		$this->isFKho = $this->SetOnce($vCheckAdmin, $effectiveUserID, $vright, "FKho");
 	}
 	public function CheckStaff_Valid($vCode, $vToken)
 	{
-		$lvsql = "select count(*) Nums from  lv_lv0007 Where lv001='$vCode' and lv097='$vToken'";
+		$this->ValidatedUserCode = "";
+		$vCode = trim((string)$vCode);
+		$vToken = trim((string)$vToken);
+
+		if ($vToken == "") {
+			return false;
+		}
+
+		if (function_exists('findUserByToken')) {
+			$tokenResult = findUserByToken($vToken);
+			if (is_array($tokenResult) && !empty($tokenResult['success'])) {
+				$resolvedCode = isset($tokenResult['username']) ? trim((string)$tokenResult['username']) : "";
+				if ($resolvedCode == "" && isset($tokenResult['userData']['lv001'])) {
+					$resolvedCode = trim((string)$tokenResult['userData']['lv001']);
+				}
+				if ($vCode != "" && $resolvedCode != "" && strcasecmp($resolvedCode, $vCode) !== 0) {
+					return false;
+				}
+				$this->ValidatedUserCode = $resolvedCode != "" ? $resolvedCode : $vCode;
+				return true;
+			}
+			if (is_array($tokenResult) && isset($tokenResult['message']) && strtolower((string)$tokenResult['message']) == 'token not found') {
+				return false;
+			}
+		}
+
+		if ($vCode == "") {
+			return false;
+		}
+
+		$lvsql = "select count(*) Nums from  lv_lv0007 Where lv001='" . sof_escape_string($vCode) . "' and lv097='" . sof_escape_string($vToken) . "'";
 		$vresult = db_query($lvsql);
 		$vrow = db_fetch_array($vresult);
-		if ($vrow) {
-			if ($vrow['Nums'] == 0)
-				return false;
+		if ($vrow && isset($vrow['Nums']) && (int)$vrow['Nums'] > 0) {
+			$this->ValidatedUserCode = $vCode;
 			return true;
 		}
+
 		return false;
 	}
+
+	private function GetRequestHeaderValue($headerName)
+	{
+		$headerName = strtolower((string)$headerName);
+		if (function_exists('getallheaders')) {
+			$headers = getallheaders();
+			if (is_array($headers)) {
+				foreach ($headers as $key => $value) {
+					if (strtolower((string)$key) === $headerName) {
+						return trim((string)$value);
+					}
+				}
+			}
+		}
+
+		$serverKey = 'HTTP_' . strtoupper(str_replace('-', '_', $headerName));
+		if (isset($_SERVER[$serverKey])) {
+			return trim((string)$_SERVER[$serverKey]);
+		}
+
+		return '';
+	}
+
+	private function GetRequestAuthValue($input, $key)
+	{
+		if (is_array($input) && isset($input[$key]) && trim((string)$input[$key]) != "") {
+			return trim((string)$input[$key]);
+		}
+		if (isset($_POST[$key]) && trim((string)$_POST[$key]) != "") {
+			return trim((string)$_POST[$key]);
+		}
+		if (isset($_GET[$key]) && trim((string)$_GET[$key]) != "") {
+			return trim((string)$_GET[$key]);
+		}
+		return '';
+	}
+
+	private function Extract_Request_Auth()
+	{
+		global $input;
+		$requestInput = is_array($input) ? $input : null;
+		if (!is_array($requestInput)) {
+			$rawBody = file_get_contents('php://input');
+			if ($rawBody) {
+				$decoded = json_decode($rawBody, true);
+				if (is_array($decoded)) {
+					$requestInput = $decoded;
+					$input = $decoded;
+				}
+			}
+		}
+
+		$code = $this->GetRequestAuthValue($requestInput, 'code');
+		$token = $this->GetRequestAuthValue($requestInput, 'token');
+
+		if ($code == '') {
+			$code = $this->GetRequestHeaderValue('X-USER-CODE');
+		}
+		if ($code == '') {
+			$code = $this->GetRequestHeaderValue('X-USER-USERNAME');
+		}
+		if ($token == '') {
+			$token = $this->GetRequestHeaderValue('X-USER-TOKEN');
+		}
+		if ($token == '') {
+			$token = $this->GetRequestHeaderValue('X-SOF-USER-TOKEN');
+		}
+		if ($token == '') {
+			$token = $this->GetRequestHeaderValue('SOF-User-Token');
+		}
+		if ($token == '') {
+			$authorization = $this->GetRequestHeaderValue('Authorization');
+			if ($authorization != '' && stripos($authorization, 'Bearer ') === 0) {
+				$token = trim(substr($authorization, 7));
+			}
+		}
+
+		return array(
+			'code' => trim((string)$code),
+			'token' => trim((string)$token),
+		);
+	}
+
 	public function LV_Escape_String($lvStr)
 	{
 		return mysql_escape_string($lvStr);

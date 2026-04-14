@@ -233,9 +233,9 @@ export default function Cameras() {
   const browserCameraSelected = isBrowserCameraType(cameraForm.camera_type)
 
   return (
-    <div className="grid xl:grid-cols-[0.9fr_1.1fr] gap-6">
+    <div className="grid xl:grid-cols-[0.9fr_1.1fr] gap-4 lg:gap-6">
       <div className="bg-white rounded-2xl shadow-sm border border-slate-200/60 overflow-hidden">
-        <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between gap-3">
+        <div className="px-4 sm:px-5 py-4 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
           <div>
             <h1 className="text-2xl font-bold text-slate-800 tracking-tight">Quản lý camera</h1>
             <p className="text-sm text-slate-500 mt-1">
@@ -244,7 +244,7 @@ export default function Cameras() {
           </div>
           <button
             onClick={handleCreateNew}
-            className="px-4 py-2 bg-primary-600 text-white rounded-xl text-sm font-semibold hover:bg-primary-700 transition-colors shadow-sm"
+            className="w-full sm:w-auto px-4 py-2 bg-primary-600 text-white rounded-xl text-sm font-semibold hover:bg-primary-700 transition-colors shadow-sm"
           >
             Tạo mới
           </button>
@@ -260,7 +260,7 @@ export default function Cameras() {
               <button
                 key={camera.id}
                 onClick={() => applyCamera(camera)}
-                className={`w-full text-left px-5 py-4 transition-colors ${
+                className={`w-full text-left px-4 sm:px-5 py-4 transition-colors ${
                   selectedCameraId === camera.id ? 'bg-primary-50/70' : 'hover:bg-slate-50'
                 }`}
               >
@@ -283,7 +283,7 @@ export default function Cameras() {
         </div>
       </div>
 
-      <div className="bg-white rounded-2xl shadow-sm border border-slate-200/60 p-6 space-y-5">
+      <div className="bg-white rounded-2xl shadow-sm border border-slate-200/60 p-4 sm:p-6 space-y-5">
         <div>
           <h2 className="text-lg font-semibold text-slate-800">
             {selectedCameraId ? 'Chi tiết camera' : 'Tạo camera mới'}
@@ -293,7 +293,7 @@ export default function Cameras() {
           </p>
         </div>
 
-        <div className="grid md:grid-cols-[1fr_auto] gap-3">
+        <div className="grid sm:grid-cols-[1fr_auto] gap-3">
           <input
             type="text"
             value={cameraForm.name}
@@ -301,7 +301,7 @@ export default function Cameras() {
             placeholder="Tên camera"
             className="px-3 py-2.5 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-primary-500/20 focus:border-primary-400 transition-all"
           />
-          <label className="inline-flex items-center gap-2 px-3 py-2.5 border border-slate-200 rounded-xl text-sm text-slate-700">
+          <label className="inline-flex items-center justify-center sm:justify-start gap-2 px-3 py-2.5 border border-slate-200 rounded-xl text-sm text-slate-700">
             <input
               type="checkbox"
               checked={!!cameraForm.is_default}
@@ -312,7 +312,7 @@ export default function Cameras() {
           </label>
         </div>
 
-        <div className="grid md:grid-cols-2 gap-3">
+        <div className="grid sm:grid-cols-2 gap-3">
           <div>
             <label className="block text-sm font-medium text-slate-700 mb-2">Loại camera</label>
             <select
@@ -359,7 +359,7 @@ export default function Cameras() {
           <div className="rounded-2xl border border-emerald-100 bg-emerald-50/60 p-4 space-y-4">
             <h3 className="text-sm font-semibold text-emerald-800">Thiết lập camera trình duyệt</h3>
 
-            <div className="grid md:grid-cols-2 gap-3">
+            <div className="grid sm:grid-cols-2 gap-3">
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-2">Hướng camera</label>
                 <select
@@ -394,7 +394,7 @@ export default function Cameras() {
           <div className="rounded-2xl border border-emerald-100 bg-emerald-50/60 p-4 space-y-4">
             <h3 className="text-sm font-semibold text-emerald-800">Tối ưu stream</h3>
 
-            <div className="grid md:grid-cols-2 gap-3">
+            <div className="grid sm:grid-cols-2 gap-3">
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-2">FPS camera</label>
                 <input
@@ -459,7 +459,7 @@ export default function Cameras() {
             </div>
 
             {cameraForm.camera_type === 'rtsp' && (
-              <div className="grid md:grid-cols-[1fr_auto] gap-3 items-center">
+              <div className="grid sm:grid-cols-[1fr_auto] gap-3 items-center">
                 <select
                   value={cameraForm.camera_options.rtsp_transport}
                   onChange={event => updateCameraOption('rtsp_transport', event.target.value)}
@@ -483,11 +483,11 @@ export default function Cameras() {
           </div>
         )}
 
-        <div className="flex gap-3 flex-wrap">
+        <div className="grid sm:flex gap-3">
           <button
             onClick={handleSave}
             disabled={saving}
-            className="px-5 py-2.5 bg-primary-600 text-white rounded-xl text-sm font-semibold hover:bg-primary-700 disabled:opacity-50 transition-colors shadow-sm"
+            className="w-full sm:w-auto px-5 py-2.5 bg-primary-600 text-white rounded-xl text-sm font-semibold hover:bg-primary-700 disabled:opacity-50 transition-colors shadow-sm"
           >
             {saving ? 'Đang lưu...' : 'Lưu camera'}
           </button>
@@ -495,7 +495,7 @@ export default function Cameras() {
           <button
             onClick={handleDelete}
             disabled={saving || !selectedCameraId || !!selectedCamera?.is_default}
-            className="px-5 py-2.5 bg-red-50 text-red-600 rounded-xl text-sm font-semibold hover:bg-red-100 disabled:opacity-50 transition-colors"
+            className="w-full sm:w-auto px-5 py-2.5 bg-red-50 text-red-600 rounded-xl text-sm font-semibold hover:bg-red-100 disabled:opacity-50 transition-colors"
           >
             Xóa camera
           </button>

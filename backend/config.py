@@ -17,6 +17,41 @@ ERP_HTTP_LOGIN_URL = os.getenv(
 )
 ERP_HTTP_TIMEOUT = int(os.getenv('ERP_HTTP_TIMEOUT', 10))
 ERP_HTTP_IMAGE_COLUMN = os.getenv('ERP_HTTP_IMAGE_COLUMN', 'lv008')
+ERP_HTTP_TOKEN_IMAGE_MODE = os.getenv('ERP_HTTP_TOKEN_IMAGE_MODE', 'test').strip().lower()
+ERP_HTTP_TOKEN_IMAGE_PROD_BASE_URL = os.getenv(
+    'ERP_HTTP_TOKEN_IMAGE_PROD_BASE_URL',
+    'https://sof.com.vn/loadimage',
+).strip()
+ERP_HTTP_TOKEN_IMAGE_TEST_BASE_URL = os.getenv(
+    'ERP_HTTP_TOKEN_IMAGE_TEST_BASE_URL',
+    'http://192.168.1.87/token',
+).strip()
+ERP_HTTP_TOKEN_REGISTER_URL = os.getenv(
+    'ERP_HTTP_TOKEN_REGISTER_URL',
+    'http://192.168.1.87/createtoken/index.php',
+).strip()
+ERP_HTTP_TOKEN_REGISTER_USERNAME = os.getenv(
+    'ERP_HTTP_TOKEN_REGISTER_USERNAME',
+    'admin',
+).strip()
+ERP_HTTP_TOKEN_REGISTER_API_TOKEN = os.getenv(
+    'ERP_HTTP_TOKEN_REGISTER_API_TOKEN',
+    'ABC',
+).strip()
+ERP_HTTP_TOKEN_COLUMN = os.getenv('ERP_HTTP_TOKEN_COLUMN', 'lv007').strip()
+ERP_HTTP_SOF_DEV_TOKEN = os.getenv(
+    'ERP_HTTP_SOF_DEV_TOKEN',
+    '34234324324sdfsfofsehweorio32432432sfshh3effds2343243244',
+)
+ERP_HTTP_TYPE_CODE = os.getenv('ERP_HTTP_TYPE_CODE', 'CHAMCONG')
+ERP_HTTP_DEVICE_TYPE = os.getenv('ERP_HTTP_DEVICE_TYPE', 'web')
+ERP_COUCHDB_HOST = os.getenv('ERP_COUCHDB_HOST', '192.168.1.20')
+ERP_COUCHDB_PORT = int(os.getenv('ERP_COUCHDB_PORT', 5984))
+ERP_COUCHDB_DB = os.getenv('ERP_COUCHDB_DB', 'couchdb20')
+ERP_COUCHDB_USER_TABLE = os.getenv('ERP_COUCHDB_USER_TABLE', 'lv_lv0066')
+ERP_COUCHDB_USER = os.getenv('ERP_COUCHDB_USER', '')
+ERP_COUCHDB_PASSWORD = os.getenv('ERP_COUCHDB_PASSWORD', '')
+ERP_COUCHDB_LOG_DOC_ID = os.getenv('ERP_COUCHDB_LOG_DOC_ID', 'logs')
 
 MYSQL_USE_PURE = os.getenv('MYSQL_USE_PURE', 'true').lower() != 'false'
 MYSQL_COMMON_CONFIG = {

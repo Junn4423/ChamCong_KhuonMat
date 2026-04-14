@@ -4,10 +4,10 @@
 import { request } from '../request'
 
 export const authApi = {
-  login: (username, password) => request('/api/admin_login', {
+  login: (username, password, mode = 'system') => request('/api/admin_login', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ username, password }),
+    body: JSON.stringify({ username, password, mode }),
   }),
 
   logout: () => request('/api/admin_logout', { method: 'POST' }),

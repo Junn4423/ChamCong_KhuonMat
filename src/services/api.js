@@ -9,7 +9,7 @@
  */
 
 // Re-export session helpers for consumers that import them from 'api'
-export { setSessionToken, getSessionToken, clearSessionToken } from './request'
+export { setSessionToken, getSessionToken, clearSessionToken, SESSION_EXPIRED_EVENT } from './request'
 // Re-export request for advanced use-cases
 export { request } from './request'
 

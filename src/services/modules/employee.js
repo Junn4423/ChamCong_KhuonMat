@@ -7,7 +7,11 @@ export const employeeApi = {
   // --- ERP ---
   getErpEmployees: () => request('/api/erp/employees'),
 
-  importAllFromErp: () => request('/api/erp/import_all', { method: 'POST' }),
+  importAllFromErp: (payload = {}) => request('/api/erp/import_all', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  }),
 
   getErpEmployeeInfo: (employeeId) =>
     request(`/api/erp_employee_info?employee_id=${encodeURIComponent(employeeId)}`),
@@ -30,6 +34,12 @@ export const employeeApi = {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
+  }),
+
+  reloadFromErp: (employeeId) => request('/api/admin/reload_from_erp', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ employee_id: employeeId }),
   }),
 
   deleteEmployee: (userId) => request(`/api/admin/delete_employee/${userId}`, {
