@@ -5,6 +5,7 @@ import io
 import os
 import json
 import base64
+import math
 from datetime import datetime, date
 
 import cv2
@@ -22,6 +23,10 @@ from backend.services.report_service import (
     build_report_workbook,
     serialize_report_rows,
 )
+from backend.services.system_settings_service import (
+    get_attendance_cooldown_seconds,
+    get_attendance_mode,
+)
 from backend.runtime import ensure_data_dir, ensure_db_path
 from backend.routes._state import state
 from backend.routes._helpers import (
@@ -34,17 +39,25 @@ from backend.routes._helpers import (
 )
 
 attendance_bp = Blueprint('attendance', __name__)
+DEFAULT_ATTENDANCE_COOLDOWN_SECONDS = 600
 
 
 def _normalize_attendance_type(value):
     attendance_type = str(value or 'checkin').strip().lower()
+    if attendance_type in {'auto', 'record', 'auto_record', 'ghi_cham_cong'}:
+        return 'auto'
     if attendance_type in {'checkout', 'check_out', 'out'}:
         return 'checkout'
     return 'checkin'
 
 
 def _attendance_type_label(attendance_type):
-    return 'Checkout' if attendance_type == 'checkout' else 'Checkin'
+    normalized = _normalize_attendance_type(attendance_type)
+    if normalized == 'checkout':
+        return 'Checkout'
+    if normalized == 'auto':
+        return 'Ghi chấm công'
+    return 'Checkin'
 
 
 def _erp_attendance_code(attendance_type, attendance_code=None):
@@ -59,16 +72,195 @@ def _location_source(attendance_type, has_request_location):
     return f'{attendance_type}_{suffix}'
 
 
-def _apply_attendance_action(user, attendance_type='checkin', request_location=None, attendance_code=None, erp_auth=None):
+def _serialize_attendance_user(user):
+    if not user:
+        return None
+
+    return {
+        'id': user.id,
+        'name': user.name,
+        'employee_id': user.employee_id,
+        'department': user.department,
+        'position': user.position,
+    }
+
+
+def _parse_cooldown_seconds(value, default_seconds=DEFAULT_ATTENDANCE_COOLDOWN_SECONDS):
+    try:
+        parsed = int(float(value))
+    except (TypeError, ValueError):
+        parsed = int(default_seconds)
+    return max(0, min(parsed, 24 * 60 * 60))
+
+
+def _format_cooldown_text(total_seconds):
+    safe_seconds = max(0, int(total_seconds or 0))
+    hours = safe_seconds // 3600
+    minutes = (safe_seconds % 3600) // 60
+    seconds = safe_seconds % 60
+
+    parts = []
+    if hours:
+        parts.append(f'{hours} giờ')
+    if minutes:
+        parts.append(f'{minutes} phút')
+    if seconds or not parts:
+        parts.append(f'{seconds} giây')
+    return ' '.join(parts)
+
+
+def _is_within_cooldown(current_time, previous_time, cooldown_seconds):
+    if cooldown_seconds <= 0 or previous_time is None:
+        return False
+    return (current_time - previous_time).total_seconds() < cooldown_seconds
+
+
+def _cooldown_remaining_seconds(current_time, previous_time, cooldown_seconds):
+    if cooldown_seconds <= 0 or previous_time is None:
+        return 0
+
+    remaining = cooldown_seconds - (current_time - previous_time).total_seconds()
+    if remaining <= 0:
+        return 0
+    return int(math.ceil(remaining))
+
+
+def _apply_attendance_action(
+    user,
+    attendance_type='checkin',
+    request_location=None,
+    attendance_code=None,
+    erp_auth=None,
+    cooldown_seconds=DEFAULT_ATTENDANCE_COOLDOWN_SECONDS,
+):
     attendance_type = _normalize_attendance_type(attendance_type)
+    cooldown_seconds = _parse_cooldown_seconds(cooldown_seconds)
     today_val = date.today()
     current_time = datetime.now()
 
-    if attendance_type == 'checkout':
-        active_attendance = Attendance.query.filter_by(
+    if attendance_type == 'auto':
+        cooldown_text = _format_cooldown_text(cooldown_seconds)
+
+        if cooldown_seconds > 0:
+            latest_record = Attendance.query.filter_by(
+                user_id=user.id,
+                date=today_val,
+            ).filter(Attendance.check_in_time.isnot(None)).order_by(Attendance.check_in_time.desc()).first()
+
+            if latest_record and _is_within_cooldown(
+                current_time,
+                latest_record.check_in_time,
+                cooldown_seconds,
+            ):
+                remaining_seconds = _cooldown_remaining_seconds(
+                    current_time,
+                    latest_record.check_in_time,
+                    cooldown_seconds,
+                )
+                return {
+                    'ok': False,
+                    'status_code': 400,
+                    'message': f'Chỉ được ghi chấm công 1 lần mỗi {cooldown_text}',
+                    'cooldown_remaining_seconds': remaining_seconds,
+                }
+
+        if cooldown_seconds > 0:
+            recent_minutes = max(1, (cooldown_seconds + 59) // 60)
+            if erp_attendance.check_recent_attendance(user.employee_id, minutes=recent_minutes, auth=erp_auth):
+                latest_record_for_erp = Attendance.query.filter_by(
+                    user_id=user.id,
+                    date=today_val,
+                ).filter(Attendance.check_in_time.isnot(None)).order_by(Attendance.check_in_time.desc()).first()
+                remaining_seconds = cooldown_seconds
+                if latest_record_for_erp and latest_record_for_erp.check_in_time:
+                    remaining_seconds = _cooldown_remaining_seconds(
+                        current_time,
+                        latest_record_for_erp.check_in_time,
+                        cooldown_seconds,
+                    ) or cooldown_seconds
+                return {
+                    'ok': False,
+                    'status_code': 400,
+                    'message': f'Đã có ghi chấm công trong ERP gần {cooldown_text}',
+                    'cooldown_remaining_seconds': remaining_seconds,
+                }
+
+        status = 'present'
+        if current_time.hour > 8 or (current_time.hour == 8 and current_time.minute > 30):
+            status = 'late'
+
+        new_attendance = Attendance(
             user_id=user.id,
+            check_in_time=current_time,
             date=today_val,
-        ).filter(Attendance.check_out_time.is_(None)).order_by(Attendance.check_in_time.desc()).first()
+            status=status,
+        )
+        db.session.add(new_attendance)
+        db.session.commit()
+
+        effective_location = request_location or get_runtime_location()
+        if effective_location:
+            try:
+                save_attendance_location(
+                    new_attendance.id,
+                    effective_location,
+                    source=_location_source('checkin', bool(request_location)),
+                )
+            except Exception as loc_exc:
+                db.session.rollback()
+                print(f"record location save error: {loc_exc}")
+
+        erp_success = erp_attendance.create_attendance_record(
+            employee_id=user.employee_id,
+            attendance_time=current_time,
+            attendance_code=_erp_attendance_code('record', attendance_code),
+            auth=erp_auth,
+        )
+
+        message = f'Ghi chấm công thành công cho {user.name}'
+        if not erp_success:
+            message += ' (lỗi ghi ERP)'
+
+        return {
+            'ok': True,
+            'status_code': 200,
+            'message': message,
+            'attendance': new_attendance,
+            'location': effective_location,
+            'location_text': location_to_text(effective_location) if effective_location else '',
+            'attendance_type': 'record',
+        }
+
+    active_attendance = Attendance.query.filter_by(
+        user_id=user.id,
+        date=today_val,
+    ).filter(Attendance.check_out_time.is_(None)).order_by(Attendance.check_in_time.desc()).first()
+
+    if attendance_type == 'checkout':
+        cooldown_text = _format_cooldown_text(cooldown_seconds)
+
+        if cooldown_seconds > 0:
+            latest_checkout = Attendance.query.filter_by(
+                user_id=user.id,
+                date=today_val,
+            ).filter(Attendance.check_out_time.isnot(None)).order_by(Attendance.check_out_time.desc()).first()
+
+            if latest_checkout and _is_within_cooldown(
+                current_time,
+                latest_checkout.check_out_time,
+                cooldown_seconds,
+            ):
+                remaining_seconds = _cooldown_remaining_seconds(
+                    current_time,
+                    latest_checkout.check_out_time,
+                    cooldown_seconds,
+                )
+                return {
+                    'ok': False,
+                    'status_code': 400,
+                    'message': f'Chỉ được Checkout 1 lần mỗi {cooldown_text}',
+                    'cooldown_remaining_seconds': remaining_seconds,
+                }
 
         if not active_attendance:
             return {
@@ -113,11 +305,6 @@ def _apply_attendance_action(user, attendance_type='checkin', request_location=N
             'attendance_type': 'checkout',
         }
 
-    active_attendance = Attendance.query.filter_by(
-        user_id=user.id,
-        date=today_val,
-    ).filter(Attendance.check_out_time.is_(None)).order_by(Attendance.check_in_time.desc()).first()
-
     if active_attendance:
         return {
             'ok': False,
@@ -125,25 +312,47 @@ def _apply_attendance_action(user, attendance_type='checkin', request_location=N
             'message': f'Nhân viên {user.name} đã Checkin và chưa Checkout',
         }
 
-    last_attendance = Attendance.query.filter_by(
-        user_id=user.id,
-        date=today_val,
-    ).order_by(Attendance.check_in_time.desc()).first()
-    if last_attendance:
-        last_time = last_attendance.check_out_time or last_attendance.check_in_time
-        if (current_time - last_time).total_seconds() < 600:
+    cooldown_text = _format_cooldown_text(cooldown_seconds)
+    latest_checkin = None
+    if cooldown_seconds > 0:
+        latest_checkin = Attendance.query.filter_by(
+            user_id=user.id,
+            date=today_val,
+        ).filter(Attendance.check_in_time.isnot(None)).order_by(Attendance.check_in_time.desc()).first()
+
+        if latest_checkin and _is_within_cooldown(
+            current_time,
+            latest_checkin.check_in_time,
+            cooldown_seconds,
+        ):
+            remaining_seconds = _cooldown_remaining_seconds(
+                current_time,
+                latest_checkin.check_in_time,
+                cooldown_seconds,
+            )
             return {
                 'ok': False,
                 'status_code': 400,
-                'message': 'Chỉ được chấm công 1 lần mỗi 10 phút',
+                'message': f'Chỉ được Checkin 1 lần mỗi {cooldown_text}',
+                'cooldown_remaining_seconds': remaining_seconds,
             }
 
-    if erp_attendance.check_recent_attendance(user.employee_id, minutes=10, auth=erp_auth):
-        return {
-            'ok': False,
-            'status_code': 400,
-            'message': 'Đã chấm công trong ERP gần đây',
-        }
+    if cooldown_seconds > 0:
+        recent_minutes = max(1, (cooldown_seconds + 59) // 60)
+        if erp_attendance.check_recent_attendance(user.employee_id, minutes=recent_minutes, auth=erp_auth):
+            remaining_seconds = cooldown_seconds
+            if latest_checkin and latest_checkin.check_in_time:
+                remaining_seconds = _cooldown_remaining_seconds(
+                    current_time,
+                    latest_checkin.check_in_time,
+                    cooldown_seconds,
+                ) or cooldown_seconds
+            return {
+                'ok': False,
+                'status_code': 400,
+                'message': f'Đã Checkin trong ERP gần {cooldown_text}',
+                'cooldown_remaining_seconds': remaining_seconds,
+            }
 
     status = 'present'
     if current_time.hour > 8 or (current_time.hour == 8 and current_time.minute > 30):
@@ -199,6 +408,12 @@ def check_attendance():
         user_id = data.get('user_id')
         request_location = parse_location_payload(data)
         attendance_type = _normalize_attendance_type(data.get('attendance_type'))
+        attendance_cooldown_seconds = get_attendance_cooldown_seconds()
+        attendance_mode = get_attendance_mode()
+        if attendance_mode == 'auto_record':
+            attendance_type = 'auto'
+        elif attendance_type == 'auto':
+            attendance_type = 'checkin'
         if not user_id:
             return jsonify({'success': False, 'message': 'Không tìm thấy user_id'}), 400
 
@@ -211,11 +426,14 @@ def check_attendance():
             attendance_type=attendance_type,
             request_location=request_location,
             erp_auth=getattr(g, 'erp_auth', None),
+            cooldown_seconds=attendance_cooldown_seconds,
         )
         if not action_result.get('ok'):
             return jsonify({
                 'success': False,
                 'message': action_result.get('message') or 'Không thể chấm công',
+                'cooldown_remaining_seconds': int(action_result.get('cooldown_remaining_seconds') or 0),
+                'user': _serialize_attendance_user(user),
             }), int(action_result.get('status_code') or 400)
 
         attendance_row = action_result.get('attendance')
@@ -232,6 +450,7 @@ def check_attendance():
             'message': action_result.get('message') or 'Chấm công thành công',
             'attendance_type': action_result.get('attendance_type') or attendance_type,
             'attendance_type_label': _attendance_type_label(action_result.get('attendance_type') or attendance_type),
+            'user': _serialize_attendance_user(user),
             'location': action_result.get('location'),
             'location_text': action_result.get('location_text') or '',
             'check_in_time': (
@@ -258,6 +477,7 @@ def attendance_image():
         request_location = None
         include_preview = False
         attendance_type = 'checkin'
+        attendance_cooldown_seconds = get_attendance_cooldown_seconds()
         if 'image' in request.files:
             image_file = request.files['image']
             attendance_code = request.form.get('attendance_code')
@@ -295,6 +515,12 @@ def attendance_image():
             request_location = parse_location_payload(data)
             with state.face_recognition_lock:
                 face_encoding, error = state.face_recognizer.encode_face_from_base64(image_base64)
+
+        attendance_mode = get_attendance_mode()
+        if attendance_mode == 'auto_record':
+            attendance_type = 'auto'
+        elif attendance_type == 'auto':
+            attendance_type = 'checkin'
 
         if error:
             return jsonify({'success': False, 'message': error}), 400
@@ -382,6 +608,7 @@ def attendance_image():
             return jsonify({
                 'success': False,
                 'message': 'Phát hiện khuôn mặt giả mạo!',
+                'user': _serialize_attendance_user(user),
                 'detection_bbox': detection_bbox,
                 'face_count': len(results),
                 'preview_image_base64': preview_image_base64,
@@ -393,11 +620,14 @@ def attendance_image():
             request_location=request_location,
             attendance_code=attendance_code,
             erp_auth=getattr(g, 'erp_auth', None),
+            cooldown_seconds=attendance_cooldown_seconds,
         )
         if not action_result.get('ok'):
             return jsonify({
                 'success': False,
                 'message': action_result.get('message') or 'Không thể chấm công',
+                'cooldown_remaining_seconds': int(action_result.get('cooldown_remaining_seconds') or 0),
+                'user': _serialize_attendance_user(user),
                 'detection_bbox': detection_bbox,
                 'face_count': len(results),
                 'preview_image_base64': preview_image_base64,
@@ -409,10 +639,7 @@ def attendance_image():
         return jsonify({
             'success': True,
             'message': action_result.get('message') or f'Điểm danh thành công cho {user.name}',
-            'user': {
-                'name': user.name, 'employee_id': user.employee_id,
-                'department': user.department, 'position': user.position
-            },
+            'user': _serialize_attendance_user(user),
             'status': attendance_row.status if attendance_row else '',
             'attendance_type': action_result.get('attendance_type') or attendance_type,
             'attendance_type_label': _attendance_type_label(action_result.get('attendance_type') or attendance_type),

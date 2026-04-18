@@ -71,15 +71,20 @@ def _clean_location_text(value):
     if not raw:
         return ''
 
+    coordinate_suffix_pattern = re.compile(
+        r'\s*\(\s*-?\d+(?:\.\d+)?\s*,\s*-?\d+(?:\.\d+)?(?:\s*(?:±|\+/-|[+-])?\s*\d+(?:\.\d+)?m)?\s*\)\s*$',
+        re.IGNORECASE,
+    )
+
     # Legacy payloads can look like: "Address | lat, lng | ±94m".
     # We only keep the first readable location label.
-    head = _safe_text(raw.split('|', 1)[0])
+    head = coordinate_suffix_pattern.sub('', _safe_text(raw.split('|', 1)[0])).strip()
     if head:
         return head
 
-    match = re.match(r'^(.*?)\s*\(([-\d.]+),\s*([-\d.]+)(?:\s*[Â±+-](\d+)m)?\)$', raw, re.IGNORECASE)
-    if match:
-        return _safe_text(match.group(1))
+    stripped_raw = coordinate_suffix_pattern.sub('', raw).strip()
+    if stripped_raw:
+        return stripped_raw
 
     return raw
 

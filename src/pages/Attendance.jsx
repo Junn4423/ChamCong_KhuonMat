@@ -1,6 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api } from '../services/api'
+import {
+  ATTENDANCE_MODE_OPTIONS,
+  ATTENDANCE_SETTINGS_EVENT,
+  getAttendanceSettings,
+  toCooldownTotalSeconds,
+} from '../services/attendanceSettings'
 
 function isBrowserCameraType(cameraType) {
   return cameraType === 'browser' || cameraType === 'mobile'
@@ -10,12 +16,13 @@ const FIXED_BROWSER_CAMERA_ID = 'fixed-browser-camera'
 const BROWSER_DEVICE_STORAGE_PREFIX = 'attendance-browser-device:'
 const LIVE_DETECT_INTERVAL_MS = 900
 const LIVE_DETECT_MAX_WIDTH = 480
-const AUTO_ATTENDANCE_COOLDOWN_MS = 120000
+const AUTO_ATTENDANCE_FALLBACK_COOLDOWN_MS = 3000
 const AUTO_ATTENDANCE_STREAK_REQUIRED = 2
 const GPS_REFRESH_INTERVAL_MS = 30000
 const GEOLOCATION_SAMPLE_TIMEOUT_MS = 12000
 const GEOLOCATION_TARGET_ACCURACY_METERS = 35
 const GEOLOCATION_MIN_SAMPLE_COUNT = 2
+const LOCATION_COORDINATE_SUFFIX_PATTERN = /\s*\(\s*-?\d+(?:\.\d+)?\s*,\s*-?\d+(?:\.\d+)?(?:\s*(?:±|\+\/-|[+\-])?\s*\d+(?:\.\d+)?m)?\s*\)\s*$/iu
 
 const FIXED_BROWSER_CAMERA = {
   id: FIXED_BROWSER_CAMERA_ID,
@@ -459,10 +466,68 @@ function formatLocation(location) {
   const accText = Number.isFinite(accuracy) ? ` ±${Math.round(accuracy)}m` : ''
 
   if (location.label) {
-    return `${location.label} (${coords}${accText})`
+    return cleanLocationDisplayText(location.label)
   }
 
   return `${coords}${accText}`
+}
+
+function cleanLocationDisplayText(value) {
+  const raw = String(value || '').trim()
+  if (!raw) return ''
+  const head = (raw.split('|')[0] || '').trim()
+  return (head || raw).replace(LOCATION_COORDINATE_SUFFIX_PATTERN, '').trim()
+}
+
+function formatCooldownText(totalSeconds) {
+  const safeSeconds = Math.max(0, Math.trunc(Number(totalSeconds) || 0))
+  const hours = Math.floor(safeSeconds / 3600)
+  const minutes = Math.floor((safeSeconds % 3600) / 60)
+  const seconds = safeSeconds % 60
+  const parts = []
+
+  if (hours > 0) {
+    parts.push(`${hours} giờ`)
+  }
+  if (minutes > 0) {
+    parts.push(`${minutes} phút`)
+  }
+  if (seconds > 0 || parts.length === 0) {
+    parts.push(`${seconds} giây`)
+  }
+
+  return parts.join(' ')
+}
+
+function formatCountdownClock(totalSeconds) {
+  const safeSeconds = Math.max(0, Math.trunc(Number(totalSeconds) || 0))
+  const minutes = Math.floor(safeSeconds / 60)
+  const seconds = safeSeconds % 60
+  return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
+}
+
+async function hasLocalFaceInFrame(canvasElement, detectorRef) {
+  if (
+    typeof window === 'undefined'
+    || typeof window.FaceDetector !== 'function'
+    || !canvasElement
+  ) {
+    return true
+  }
+
+  try {
+    if (!detectorRef.current) {
+      detectorRef.current = new window.FaceDetector({
+        fastMode: true,
+        maxDetectedFaces: 3,
+      })
+    }
+
+    const faces = await detectorRef.current.detect(canvasElement)
+    return Array.isArray(faces) && faces.length > 0
+  } catch {
+    return true
+  }
 }
 
 function computeContainedVideoRect(containerWidth, containerHeight, frameWidth, frameHeight) {
@@ -542,12 +607,13 @@ export default function Attendance() {
   const [streamKey, setStreamKey] = useState(Date.now())
   const [attendanceBusy, setAttendanceBusy] = useState(false)
   const [attendanceFeedback, setAttendanceFeedback] = useState(null)
+  const [cooldownPopup, setCooldownPopup] = useState({ open: false, secondsLeft: 0, employeeName: '' })
   const [lastCapturePreview, setLastCapturePreview] = useState(null)
   const [liveDetections, setLiveDetections] = useState([])
   const [liveDetectionFrame, setLiveDetectionFrame] = useState({ width: 0, height: 0 })
   const [liveDetectionError, setLiveDetectionError] = useState('')
-  const [liveRecognizeEnabled, setLiveRecognizeEnabled] = useState(true)
-  const [autoAttendanceEnabled, setAutoAttendanceEnabled] = useState(false)
+  const [attendanceSettings, setAttendanceSettings] = useState(() => getAttendanceSettings())
+  const [selectedAttendanceType, setSelectedAttendanceType] = useState('checkin')
   const [previewViewport, setPreviewViewport] = useState({ width: 0, height: 0 })
   const [browserDevices, setBrowserDevices] = useState([])
   const [browserDevicesLoading, setBrowserDevicesLoading] = useState(false)
@@ -560,6 +626,8 @@ export default function Attendance() {
   const detectCanvasRef = useRef(null)
   const locationTimerRef = useRef(null)
   const detectTimerRef = useRef(null)
+  const cooldownPopupTimerRef = useRef(null)
+  const localFaceDetectorRef = useRef(null)
   const detectInFlightRef = useRef(false)
   const autoAttendanceInFlightRef = useRef(false)
   const autoAttendanceStreakRef = useRef({ userId: null, count: 0 })
@@ -582,6 +650,65 @@ export default function Attendance() {
     && typeof navigator.mediaDevices.getUserMedia === 'function'
     && typeof navigator.mediaDevices.enumerateDevices === 'function'
   const requiresSecureContext = typeof window !== 'undefined' && !window.isSecureContext
+  const attendanceMode = attendanceSettings.mode === ATTENDANCE_MODE_OPTIONS.autoRecord
+    ? ATTENDANCE_MODE_OPTIONS.autoRecord
+    : ATTENDANCE_MODE_OPTIONS.checkinCheckout
+  const attendanceCooldownSeconds = toCooldownTotalSeconds(attendanceSettings)
+  const autoAttendanceCooldownMs = attendanceCooldownSeconds > 0
+    ? attendanceCooldownSeconds * 1000
+    : AUTO_ATTENDANCE_FALLBACK_COOLDOWN_MS
+  const activeAttendanceType = attendanceMode === ATTENDANCE_MODE_OPTIONS.checkinCheckout
+    ? selectedAttendanceType
+    : 'auto'
+  const attendanceModeLabel = attendanceMode === ATTENDANCE_MODE_OPTIONS.checkinCheckout
+    ? (selectedAttendanceType === 'checkout' ? 'Checkout' : 'Checkin')
+    : 'Ghi chấm công'
+
+  function clearCooldownPopupTimer() {
+    if (cooldownPopupTimerRef.current) {
+      clearInterval(cooldownPopupTimerRef.current)
+      cooldownPopupTimerRef.current = null
+    }
+  }
+
+  function hideCooldownPopup() {
+    clearCooldownPopupTimer()
+    setCooldownPopup({ open: false, secondsLeft: 0, employeeName: '' })
+  }
+
+  function showCooldownPopup(remainingSeconds, employeeName = '') {
+    const safeSeconds = Math.max(0, Math.ceil(Number(remainingSeconds) || 0))
+    if (safeSeconds <= 0) {
+      hideCooldownPopup()
+      return
+    }
+
+    clearCooldownPopupTimer()
+    setCooldownPopup({
+      open: true,
+      secondsLeft: safeSeconds,
+      employeeName: String(employeeName || '').trim(),
+    })
+
+    cooldownPopupTimerRef.current = setInterval(() => {
+      setCooldownPopup(prev => {
+        if (!prev.open) {
+          return prev
+        }
+
+        const nextSecondsLeft = prev.secondsLeft - 1
+        if (nextSecondsLeft <= 0) {
+          clearCooldownPopupTimer()
+          return { open: false, secondsLeft: 0, employeeName: '' }
+        }
+
+        return {
+          ...prev,
+          secondsLeft: nextSecondsLeft,
+        }
+      })
+    }, 1000)
+  }
 
   useEffect(() => {
     initializePage()
@@ -590,7 +717,22 @@ export default function Attendance() {
       clearInterval(attendanceTimer)
       if (locationTimerRef.current) clearInterval(locationTimerRef.current)
       if (detectTimerRef.current) clearInterval(detectTimerRef.current)
+      clearCooldownPopupTimer()
       stopBrowserCameraStream()
+    }
+  }, [])
+
+  useEffect(() => {
+    const refreshAttendanceSettings = () => {
+      setAttendanceSettings(getAttendanceSettings())
+    }
+
+    refreshAttendanceSettings()
+    window.addEventListener(ATTENDANCE_SETTINGS_EVENT, refreshAttendanceSettings)
+    window.addEventListener('storage', refreshAttendanceSettings)
+    return () => {
+      window.removeEventListener(ATTENDANCE_SETTINGS_EVENT, refreshAttendanceSettings)
+      window.removeEventListener('storage', refreshAttendanceSettings)
     }
   }, [])
 
@@ -682,6 +824,11 @@ export default function Attendance() {
   }, [browserCameraSelected])
 
   useEffect(() => {
+    autoAttendanceStreakRef.current = { userId: null, count: 0 }
+    autoAttendanceCooldownRef.current = {}
+  }, [attendanceMode, selectedAttendanceType, autoAttendanceCooldownMs])
+
+  useEffect(() => {
     if (detectTimerRef.current) {
       clearInterval(detectTimerRef.current)
       detectTimerRef.current = null
@@ -722,7 +869,18 @@ export default function Attendance() {
 
         context.drawImage(video, 0, 0, targetWidth, targetHeight)
 
-        const recognizeRealtime = liveRecognizeEnabled || autoAttendanceEnabled
+        const recognizeRealtime = true
+        const localFaceDetected = await hasLocalFaceInFrame(detectCanvas, localFaceDetectorRef)
+        if (!localFaceDetected) {
+          setLiveDetections([])
+          setLiveDetectionFrame({
+            width: targetWidth,
+            height: targetHeight,
+          })
+          setLiveDetectionError('')
+          autoAttendanceStreakRef.current = { userId: null, count: 0 }
+          return
+        }
 
         const res = await api.attendanceDetectFrame({
           image_base64: detectCanvas.toDataURL('image/jpeg', 0.65),
@@ -742,7 +900,7 @@ export default function Attendance() {
           })
           setLiveDetectionError('')
 
-          if (autoAttendanceEnabled && recognizeRealtime && !autoAttendanceInFlightRef.current) {
+          if (recognizeRealtime && !autoAttendanceInFlightRef.current) {
             const matchedDetections = detections.filter(
               item => Boolean(item?.matched) && item?.user_id != null,
             )
@@ -762,47 +920,20 @@ export default function Attendance() {
               }
 
               const now = Date.now()
-              const lastAttemptAt = Number(autoAttendanceCooldownRef.current[candidateUserId] || 0)
-              const cooldownPassed = now - lastAttemptAt >= AUTO_ATTENDANCE_COOLDOWN_MS
+              const nextAllowedAt = Number(autoAttendanceCooldownRef.current[candidateUserId] || 0)
+              const cooldownPassed = now >= nextAllowedAt
 
               if (streak.count >= AUTO_ATTENDANCE_STREAK_REQUIRED && cooldownPassed) {
-                autoAttendanceCooldownRef.current[candidateUserId] = now
+                autoAttendanceCooldownRef.current[candidateUserId] = now + autoAttendanceCooldownMs
                 autoAttendanceInFlightRef.current = true
-                setAttendanceBusy(true)
 
                 try {
-                  const payloadLocation = (locationEnabled && locationInfo) ? locationInfo : null
-                  const submitRes = await api.checkAttendance(candidate.user_id, payloadLocation, 'checkin')
-
-                  if (submitRes?.success) {
-                    setAttendanceFeedback({
-                      type: 'success',
-                      message: `${submitRes.message} (Tự động)`,
-                      detail: submitRes.location_text || '',
-                    })
-                    await loadTodayRecords()
-                  } else {
-                    const failureMessage = submitRes?.message || 'Không thể tự động điểm danh'
-                    const isAlreadyChecked = failureMessage.toLowerCase().includes('10 phút')
-                      || failureMessage.toLowerCase().includes('gần đây')
-
-                    setAttendanceFeedback({
-                      type: isAlreadyChecked ? 'success' : 'error',
-                      message: isAlreadyChecked
-                        ? `${failureMessage} (đã có bản ghi gần thời điểm hiện tại)`
-                        : failureMessage,
-                      detail: '',
-                    })
-                  }
-                } catch (error) {
-                  setAttendanceFeedback({
-                    type: 'error',
-                    message: error?.message || 'Không thể tự động điểm danh',
-                    detail: '',
+                  await captureBrowserAttendance(activeAttendanceType, {
+                    autoTriggered: true,
+                    detectedUserId: candidateUserId,
                   })
                 } finally {
                   autoAttendanceInFlightRef.current = false
-                  setAttendanceBusy(false)
                 }
               }
             }
@@ -836,11 +967,12 @@ export default function Attendance() {
     }
   }, [
     attendanceBusy,
-    autoAttendanceEnabled,
+    attendanceCooldownSeconds,
+    activeAttendanceType,
+    autoAttendanceCooldownMs,
     browserCameraSelected,
     cameraRunning,
     cameraRuntimeMode,
-    liveRecognizeEnabled,
     locationEnabled,
     locationInfo,
   ])
@@ -1118,7 +1250,9 @@ export default function Attendance() {
     setCameraLoading(false)
   }
 
-  async function captureBrowserAttendance(attendanceType = 'checkin') {
+  async function captureBrowserAttendance(attendanceType = 'checkin', options = {}) {
+    const detectedUserId = String(options?.detectedUserId || '').trim()
+
     if (!cameraRunning || cameraRuntimeMode !== 'browser') {
       window.alert('Hãy bật camera trình duyệt trước khi điểm danh.')
       return
@@ -1143,17 +1277,22 @@ export default function Attendance() {
     context.drawImage(video, 0, 0, canvas.width, canvas.height)
     setAttendanceBusy(true)
     setAttendanceFeedback(null)
+    setLastCapturePreview(null)
 
-    const normalizedAttendanceType = String(attendanceType || 'checkin').toLowerCase() === 'checkout'
+    const rawAttendanceType = String(attendanceType || 'checkin').toLowerCase()
+    const normalizedAttendanceType = rawAttendanceType === 'checkout'
       ? 'checkout'
-      : 'checkin'
-    const actionLabel = normalizedAttendanceType === 'checkout' ? 'Checkout' : 'Checkin'
+      : (rawAttendanceType === 'auto' ? 'auto' : 'checkin')
+    const actionLabel = normalizedAttendanceType === 'checkout'
+      ? 'Checkout'
+      : (normalizedAttendanceType === 'auto' ? 'Ghi chấm công' : 'Checkin')
 
     try {
       const payload = {
         image_base64: canvas.toDataURL('image/jpeg', 0.9),
         include_preview: true,
         attendance_type: normalizedAttendanceType,
+        attendance_cooldown_seconds: attendanceCooldownSeconds,
       }
 
       if (locationEnabled) {
@@ -1171,20 +1310,69 @@ export default function Attendance() {
           faceCount: Number.isFinite(Number(res.face_count)) ? Number(res.face_count) : null,
         }
         : null
-      setLastCapturePreview(capturePreview)
+      if (capturePreview) {
+        setLastCapturePreview(capturePreview)
+      }
 
       if (res.success) {
+        const employeeName = String(res?.user?.name || '').trim()
+        let successMessage = ''
+        if (attendanceMode === ATTENDANCE_MODE_OPTIONS.autoRecord || normalizedAttendanceType === 'auto') {
+          successMessage = employeeName
+            ? `Đã quét mặt thành công cho ${employeeName}`
+            : 'Đã quét mặt thành công'
+        } else if (normalizedAttendanceType === 'checkout') {
+          successMessage = employeeName
+            ? `Đã Checkout thành công cho ${employeeName}`
+            : 'Đã Checkout thành công'
+        } else {
+          successMessage = employeeName
+            ? `Đã Checkin thành công cho ${employeeName}`
+            : 'Đã Checkin thành công'
+        }
+
+        hideCooldownPopup()
         setAttendanceFeedback({
           type: 'success',
-          message: res.message || `${actionLabel} thành công`,
-          detail: res.location_text || '',
+          message: successMessage,
+          detail: cleanLocationDisplayText(res.location_text),
         })
         await loadTodayRecords()
       } else {
+        const failureMessage = res.message || `Không thể ${actionLabel} bằng camera trình duyệt`
+        const lowerFailureMessage = failureMessage.toLowerCase()
+        const cooldownRemainingRaw = Number(res?.cooldown_remaining_seconds)
+        const cooldownRemainingSeconds = Number.isFinite(cooldownRemainingRaw)
+          ? Math.max(0, Math.ceil(cooldownRemainingRaw))
+          : 0
+        const isCooldownMessage = (
+          lowerFailureMessage.includes('chỉ được')
+          || lowerFailureMessage.includes('gần đây')
+          || lowerFailureMessage.includes('erp gần')
+          || cooldownRemainingSeconds > 0
+        )
+
+        if (isCooldownMessage) {
+          const popupSeconds = cooldownRemainingSeconds > 0
+            ? cooldownRemainingSeconds
+            : Math.max(1, Math.ceil(attendanceCooldownSeconds || 0))
+          const employeeName = String(res?.user?.name || '').trim()
+
+          showCooldownPopup(popupSeconds, employeeName)
+          if (detectedUserId) {
+            const now = Date.now()
+            const currentNextAllowedAt = Number(autoAttendanceCooldownRef.current[detectedUserId] || 0)
+            const nextAllowedAt = now + (popupSeconds * 1000)
+            autoAttendanceCooldownRef.current[detectedUserId] = Math.max(currentNextAllowedAt, nextAllowedAt)
+          }
+        }
+
         setAttendanceFeedback({
           type: 'error',
-          message: res.message || `Không thể ${actionLabel} bằng camera trình duyệt`,
-          detail: '',
+          message: isCooldownMessage ? 'Đang bị giới hạn quét mặt' : failureMessage,
+          detail: isCooldownMessage
+            ? `Thời gian cho lần quét tiếp theo: ${formatCountdownClock(cooldownRemainingSeconds > 0 ? cooldownRemainingSeconds : Math.max(1, Math.ceil(attendanceCooldownSeconds || 0)))}`
+            : '',
         })
       }
     } catch (error) {
@@ -1193,9 +1381,9 @@ export default function Attendance() {
         message: error?.message || 'Không thể gửi ảnh điểm danh',
         detail: '',
       })
+    } finally {
+      setAttendanceBusy(false)
     }
-
-    setAttendanceBusy(false)
   }
 
   function handleVideoError() {
@@ -1203,25 +1391,6 @@ export default function Attendance() {
     setTimeout(() => {
       setStreamKey(Date.now())
     }, 1200)
-  }
-
-  function getCurrentPositionPromise() {
-    return new Promise((resolve, reject) => {
-      if (!navigator.geolocation) {
-        reject(new Error('Trình duyệt không hỗ trợ geolocation'))
-        return
-      }
-
-      navigator.geolocation.getCurrentPosition(
-        position => resolve(position),
-        error => reject(error),
-        {
-          enableHighAccuracy: true,
-          timeout: 10000,
-          maximumAge: 0,
-        }
-      )
-    })
   }
 
   async function updateBrowserLocation() {
@@ -1345,6 +1514,18 @@ export default function Attendance() {
 
   return (
     <div className="grid xl:grid-cols-[1.1fr_0.9fr] gap-4 lg:gap-6">
+      {cooldownPopup.open && (
+        <div className="fixed right-4 top-4 z-50 w-[min(92vw,22rem)] rounded-2xl border border-amber-200 bg-amber-50 shadow-xl px-4 py-3 text-amber-800">
+          <p className="text-sm font-semibold">Đang bị giới hạn quét mặt</p>
+          <p className="mt-1 text-sm">
+            Thời gian cho lần quét tiếp theo: <span className="font-bold">{formatCountdownClock(cooldownPopup.secondsLeft)}</span>
+          </p>
+          {cooldownPopup.employeeName && (
+            <p className="mt-1 text-xs text-amber-700">Nhân viên: {cooldownPopup.employeeName}</p>
+          )}
+        </div>
+      )}
+
       <div className="bg-white rounded-2xl shadow-sm border border-slate-200/60 overflow-hidden">
         <div className="px-4 sm:px-5 py-4 border-b border-slate-100 flex items-center justify-between gap-3 flex-wrap">
           <div>
@@ -1426,28 +1607,55 @@ export default function Attendance() {
           </div>
 
           {browserCameraSelected && cameraRunning && cameraRuntimeMode === 'browser' && (
-            <div className="flex items-center gap-2 flex-wrap">
-              <button
-                onClick={() => captureBrowserAttendance('checkin')}
-                disabled={attendanceBusy}
-                className="w-full sm:w-auto px-4 py-2.5 bg-emerald-600 text-white rounded-xl text-sm font-semibold hover:bg-emerald-700 disabled:opacity-50 transition-colors shadow-sm"
-              >
-                {attendanceBusy ? 'Đang xử lý...' : 'Checkin'}
-              </button>
-              <button
-                onClick={() => captureBrowserAttendance('checkout')}
-                disabled={attendanceBusy}
-                className="w-full sm:w-auto px-4 py-2.5 bg-amber-500 text-white rounded-xl text-sm font-semibold hover:bg-amber-600 disabled:opacity-50 transition-colors shadow-sm"
-              >
-                {attendanceBusy ? 'Đang xử lý...' : 'Checkout'}
-              </button>
-              <span className="text-xs text-slate-500">Đặt khuôn mặt gọn trong vùng bo tròn rồi bấm chụp.</span>
+            <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-xs sm:text-sm text-slate-700 space-y-2">
+              {attendanceMode === ATTENDANCE_MODE_OPTIONS.checkinCheckout ? (
+                <div className="flex items-center gap-2 flex-wrap">
+                  <button
+                    type="button"
+                    onClick={() => setSelectedAttendanceType('checkin')}
+                    disabled={attendanceBusy}
+                    className={`w-full sm:w-auto px-4 py-2.5 rounded-xl text-sm font-semibold transition-colors shadow-sm ${
+                      selectedAttendanceType === 'checkin'
+                        ? 'bg-emerald-600 text-white hover:bg-emerald-700'
+                        : 'bg-white text-emerald-700 border border-emerald-200 hover:bg-emerald-50'
+                    }`}
+                  >
+                    Chế độ Checkin
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedAttendanceType('checkout')}
+                    disabled={attendanceBusy}
+                    className={`w-full sm:w-auto px-4 py-2.5 rounded-xl text-sm font-semibold transition-colors shadow-sm ${
+                      selectedAttendanceType === 'checkout'
+                        ? 'bg-amber-500 text-white hover:bg-amber-600'
+                        : 'bg-white text-amber-700 border border-amber-200 hover:bg-amber-50'
+                    }`}
+                  >
+                    Chế độ Checkout
+                  </button>
+                </div>
+              ) : (
+                <p className="text-slate-600">
+                  Đang bật chế độ ghi chấm công tự động: mỗi lần quét khuôn mặt hợp lệ sẽ được lưu thành một lần ghi chấm công độc lập.
+                </p>
+              )}
+
+              <p className="text-slate-500">
+                Trạng thái đang ghi: <span className="font-semibold text-slate-700">{attendanceModeLabel}</span>. Hệ thống tự chụp và gửi khi phát hiện khuôn mặt hợp lệ.
+              </p>
+              <p className="text-slate-500">
+                Giới hạn thời gian giữa 2 lần ghi: <span className="font-semibold text-slate-700">{formatCooldownText(attendanceCooldownSeconds)}</span>.
+              </p>
+              {attendanceBusy && (
+                <p className="text-amber-600 font-medium">Đang xử lý điểm danh...</p>
+              )}
             </div>
           )}
 
           {browserCameraSelected && (
             <p className="text-xs sm:text-sm text-slate-500">
-              Khung preview trên điện thoại đã chuyển sang tỉ lệ dọc. Hãy giữ toàn bộ khuôn mặt nằm trong vùng bo tròn để tăng độ chính xác khi chụp điểm danh.
+              Khung preview trên điện thoại đã chuyển sang tỉ lệ dọc. Hãy giữ toàn bộ khuôn mặt nằm trong vùng bo tròn để tăng độ chính xác khi hệ thống tự nhận diện điểm danh.
             </p>
           )}
 
@@ -1461,53 +1669,14 @@ export default function Attendance() {
 
           {browserCameraSelected && cameraRunning && cameraRuntimeMode === 'browser' && (
             <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs sm:text-sm text-slate-700 space-y-2">
-              <div className="flex flex-wrap items-center gap-4">
-                <label className="inline-flex items-center gap-2 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={liveRecognizeEnabled}
-                    onChange={event => {
-                      const enabled = event.target.checked
-                      setLiveRecognizeEnabled(enabled)
-                      if (!enabled) {
-                        setAutoAttendanceEnabled(false)
-                      }
-                    }}
-                    className="rounded border-slate-300"
-                  />
-                  <span>Nhận dạng realtime</span>
-                </label>
-
-                <label className="inline-flex items-center gap-2 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={autoAttendanceEnabled}
-                    onChange={event => {
-                      const enabled = event.target.checked
-                      setAutoAttendanceEnabled(enabled)
-                      if (enabled) {
-                        setLiveRecognizeEnabled(true)
-                      }
-                    }}
-                    className="rounded border-slate-300"
-                  />
-                  <span>Tự điểm danh (không cần bấm chụp)</span>
-                </label>
-              </div>
-
-              {liveRecognizeEnabled && (
-                <p className="text-slate-600">
-                  {liveRecognizedNames.length > 0
-                    ? `Đang nhận dạng: ${liveRecognizedNames.join(', ')}`
-                    : 'Đang nhận dạng: chưa có khuôn mặt khớp'}
-                </p>
-              )}
-
-              {autoAttendanceEnabled && (
-                <p className="text-slate-500">
-                  Hệ thống sẽ tự điểm danh khi khuôn mặt được nhận dạng ổn định {AUTO_ATTENDANCE_STREAK_REQUIRED} khung liên tiếp.
-                </p>
-              )}
+              <p className="text-slate-600">
+                {liveRecognizedNames.length > 0
+                  ? `Đang nhận dạng: ${liveRecognizedNames.join(', ')}`
+                  : 'Đang nhận dạng: chưa có khuôn mặt khớp'}
+              </p>
+              <p className="text-slate-500">
+                Hệ thống chỉ gọi API khi phát hiện có khuôn mặt trong khung hình và nhận dạng ổn định {AUTO_ATTENDANCE_STREAK_REQUIRED} khung liên tiếp.
+              </p>
             </div>
           )}
 
@@ -1638,21 +1807,21 @@ export default function Attendance() {
             }`}>
               <p className="font-medium">{attendanceFeedback.message}</p>
               {attendanceFeedback.detail && (
-                <p className="mt-1 opacity-80">{attendanceFeedback.detail}</p>
+                <p className="mt-1 opacity-80">{cleanLocationDisplayText(attendanceFeedback.detail)}</p>
               )}
             </div>
           )}
 
-          {browserCameraSelected && lastCapturePreview?.imageBase64 && (
+          {lastCapturePreview?.imageBase64 && (
             <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 space-y-2">
-              <p className="text-sm font-medium text-slate-700">Ảnh nhận diện lần chụp gần nhất (có bounding box)</p>
+              <p className="text-sm font-medium text-slate-700">Ảnh nhận diện lần quét gần nhất (có bounding box)</p>
               <img
                 src={lastCapturePreview.imageBase64}
                 alt="Detection preview"
                 className="w-full max-h-56 object-contain rounded-lg border border-slate-200 bg-black"
               />
               <div className="text-xs text-slate-500 flex items-center justify-between gap-2">
-                <span>Bounding box hiện hiển thị trên ảnh chụp gửi nhận diện.</span>
+                <span>Bounding box hiển thị trên ảnh vừa gửi nhận diện gần nhất.</span>
                 {Number.isFinite(lastCapturePreview.faceCount) && (
                   <span>Faces: {lastCapturePreview.faceCount}</span>
                 )}
@@ -1727,10 +1896,10 @@ export default function Attendance() {
                       {record.employee_id} · {record.department || 'Chưa có phòng ban'}
                     </p>
                     {record.check_in_location_text && (
-                      <p className="text-xs text-slate-400 mt-1">Vị trí Checkin: {record.check_in_location_text}</p>
+                      <p className="text-xs text-slate-400 mt-1">Vị trí Checkin: {cleanLocationDisplayText(record.check_in_location_text)}</p>
                     )}
                     {record.check_out_location_text && (
-                      <p className="text-xs text-slate-400 mt-1">Vị trí Checkout: {record.check_out_location_text}</p>
+                      <p className="text-xs text-slate-400 mt-1">Vị trí Checkout: {cleanLocationDisplayText(record.check_out_location_text)}</p>
                     )}
                   </div>
                   <div className="text-right shrink-0">

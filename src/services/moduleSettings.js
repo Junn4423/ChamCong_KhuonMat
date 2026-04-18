@@ -65,6 +65,8 @@ const DEFAULT_VISIBILITY = MODULE_TOGGLE_DEFINITIONS.reduce((accumulator, module
 
 export const DEFAULT_MODULE_VISIBILITY = Object.freeze(DEFAULT_VISIBILITY)
 
+let moduleVisibilityCache = { ...DEFAULT_MODULE_VISIBILITY }
+
 function normalizeVisibility(input) {
   const merged = { ...DEFAULT_MODULE_VISIBILITY }
   if (!input || typeof input !== 'object') {
@@ -81,28 +83,26 @@ function normalizeVisibility(input) {
 }
 
 export function getModuleVisibility() {
-  if (typeof window === 'undefined') {
-    return { ...DEFAULT_MODULE_VISIBILITY }
-  }
+  return { ...moduleVisibilityCache }
+}
 
-  try {
-    const raw = localStorage.getItem(MODULE_SETTINGS_STORAGE_KEY)
-    if (!raw) {
-      return { ...DEFAULT_MODULE_VISIBILITY }
-    }
-    return normalizeVisibility(JSON.parse(raw))
-  } catch {
-    return { ...DEFAULT_MODULE_VISIBILITY }
+function emitModuleVisibilityChanged(normalized) {
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent(MODULE_SETTINGS_EVENT, { detail: normalized }))
   }
 }
 
-export function saveModuleVisibility(nextVisibility) {
+export function applyModuleVisibility(nextVisibility, options = {}) {
   const normalized = normalizeVisibility(nextVisibility)
-  if (typeof window !== 'undefined') {
-    localStorage.setItem(MODULE_SETTINGS_STORAGE_KEY, JSON.stringify(normalized))
-    window.dispatchEvent(new CustomEvent(MODULE_SETTINGS_EVENT, { detail: normalized }))
+  moduleVisibilityCache = normalized
+  if (options.emitEvent !== false) {
+    emitModuleVisibilityChanged(normalized)
   }
-  return normalized
+  return { ...normalized }
+}
+
+export function saveModuleVisibility(nextVisibility) {
+  return applyModuleVisibility(nextVisibility)
 }
 
 export function setModuleEnabled(moduleKey, enabled) {
@@ -115,11 +115,11 @@ export function setModuleEnabled(moduleKey, enabled) {
     ...current,
     [moduleKey]: Boolean(enabled),
   }
-  return saveModuleVisibility(next)
+  return applyModuleVisibility(next)
 }
 
 export function resetModuleVisibility() {
-  return saveModuleVisibility(DEFAULT_MODULE_VISIBILITY)
+  return applyModuleVisibility(DEFAULT_MODULE_VISIBILITY)
 }
 
 export function isModuleEnabled(moduleKey) {

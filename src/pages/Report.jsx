@@ -11,6 +11,11 @@ const DEFAULT_PUSH_STATUS = Object.freeze({
   missingTypes: [],
 })
 
+const ATTENDANCE_VIEW_MODES = Object.freeze({
+  checkinCheckout: 'checkin_checkout',
+  attendanceRecord: 'attendance_record',
+})
+
 function todayString() {
   return new Date().toISOString().split('T')[0]
 }
@@ -69,9 +74,11 @@ function describeLocationText(locationText) {
   const raw = String(locationText || '').trim()
   if (!raw) return '-'
 
+  const coordinateSuffixPattern = /\s*\(\s*-?\d+(?:\.\d+)?\s*,\s*-?\d+(?:\.\d+)?(?:\s*(?:±|\+\/-|[+\-])?\s*\d+(?:\.\d+)?m)?\s*\)\s*$/iu
+
   // Legacy location payloads may include "address | lat,lng | ±accuracy".
   // Report UI should only keep the first readable address segment.
-  const cleaned = raw.split('|')[0]?.trim() || ''
+  const cleaned = (raw.split('|')[0] || '').replace(coordinateSuffixPattern, '').trim()
   return cleaned || raw
 }
 
@@ -150,6 +157,60 @@ function resolveRowKey(record, index) {
     return String(record.attendance_id)
   }
   return `${record?.employee_id || 'row'}-${record?.date || ''}-${record?.check_in_time || ''}-${index}`
+}
+
+function buildReportDisplayRows(reportRows, viewMode) {
+  const source = Array.isArray(reportRows) ? reportRows : []
+  if (viewMode === ATTENDANCE_VIEW_MODES.checkinCheckout) {
+    return source.map((record, index) => ({
+      ...record,
+      row_key: resolveRowKey(record, index),
+      attendance_event_type: '',
+      attendance_event_time: '',
+      attendance_event_location: '',
+    }))
+  }
+
+  const eventRows = []
+  source.forEach((record, index) => {
+    const baseKey = resolveRowKey(record, index)
+    const checkInTime = String(record?.check_in_time || '').trim()
+    const checkOutTime = String(record?.check_out_time || '').trim()
+    const checkInLocation = String(record?.check_in_location || '').trim()
+    const checkOutLocation = String(record?.check_out_location || '').trim()
+
+    if (checkInTime) {
+      eventRows.push({
+        ...record,
+        row_key: `${baseKey}-in`,
+        attendance_event_type: 'IN',
+        attendance_event_time: checkInTime,
+        attendance_event_location: checkInLocation,
+      })
+    }
+
+    if (checkOutTime) {
+      eventRows.push({
+        ...record,
+        row_key: `${baseKey}-out`,
+        attendance_event_type: 'OUT',
+        attendance_event_time: checkOutTime,
+        attendance_event_location: checkOutLocation,
+      })
+    }
+
+    if (!checkInTime && !checkOutTime) {
+      eventRows.push({
+        ...record,
+        row_key: `${baseKey}-na`,
+        attendance_event_type: '',
+        attendance_event_time: '',
+        attendance_event_location: '',
+      })
+    }
+  })
+
+  return eventRows
 }
 
 function buildPushStatus(expectedTypes, matchedTypes) {
@@ -293,28 +354,43 @@ export default function Report() {
 
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(10)
+  const [attendanceViewMode, setAttendanceViewMode] = useState(ATTENDANCE_VIEW_MODES.checkinCheckout)
+
+  const displayRows = useMemo(
+    () => buildReportDisplayRows(records, attendanceViewMode),
+    [records, attendanceViewMode],
+  )
 
   useEffect(() => {
     loadAuthMode()
     loadReport(createDefaultFilters())
   }, [])
 
-  const totalPages = Math.max(1, Math.ceil(records.length / pageSize))
+  useEffect(() => {
+    setPage(1)
+  }, [attendanceViewMode])
+
+  const totalPages = Math.max(1, Math.ceil(displayRows.length / pageSize))
 
   const paginatedRecords = useMemo(() => {
     const startIndex = (page - 1) * pageSize
-    return records.slice(startIndex, startIndex + pageSize)
-  }, [records, page, pageSize])
+    return displayRows.slice(startIndex, startIndex + pageSize)
+  }, [displayRows, page, pageSize])
 
   const isInternalMode = authMode === 'internal'
+  const showCheckinCheckoutColumns = attendanceViewMode === ATTENDANCE_VIEW_MODES.checkinCheckout
 
   function resetPushStatusView() {
     setPushStatusByRow({})
     setCheckSummary(null)
   }
 
+  useEffect(() => {
+    resetPushStatusView()
+  }, [attendanceViewMode])
+
   function getRowPushStatus(record, index) {
-    const rowKey = resolveRowKey(record, index)
+    const rowKey = String(record?.row_key || resolveRowKey(record, index))
     return pushStatusByRow[rowKey] || DEFAULT_PUSH_STATUS
   }
 
@@ -454,18 +530,28 @@ export default function Report() {
     }
 
     reportRows.forEach((record, index) => {
+      const rowKey = String(record?.row_key || resolveRowKey(record, index))
       const employeeId = normalizeEmployeeId(record.employee_id)
       const dateText = normalizeDateText(record.date || record.date_display)
+      const eventType = String(record?.attendance_event_type || '').trim().toUpperCase()
+      const eventTime = String(record?.attendance_event_time || '').trim()
 
       const expectedEvents = []
-      const checkInEventKey = buildAttendanceEventKey(employeeId, dateText, record.check_in_time, 'IN')
-      if (checkInEventKey) {
-        expectedEvents.push({ type: 'IN', key: checkInEventKey })
-      }
+      if ((eventType === 'IN' || eventType === 'OUT') && eventTime) {
+        const eventKey = buildAttendanceEventKey(employeeId, dateText, eventTime, eventType)
+        if (eventKey) {
+          expectedEvents.push({ type: eventType, key: eventKey })
+        }
+      } else {
+        const checkInEventKey = buildAttendanceEventKey(employeeId, dateText, record.check_in_time, 'IN')
+        if (checkInEventKey) {
+          expectedEvents.push({ type: 'IN', key: checkInEventKey })
+        }
 
-      const checkOutEventKey = buildAttendanceEventKey(employeeId, dateText, record.check_out_time, 'OUT')
-      if (checkOutEventKey) {
-        expectedEvents.push({ type: 'OUT', key: checkOutEventKey })
+        const checkOutEventKey = buildAttendanceEventKey(employeeId, dateText, record.check_out_time, 'OUT')
+        if (checkOutEventKey) {
+          expectedEvents.push({ type: 'OUT', key: checkOutEventKey })
+        }
       }
 
       const expectedTypes = expectedEvents.map(item => item.type)
@@ -474,7 +560,7 @@ export default function Report() {
         .map(item => item.type)
 
       const pushStatus = buildPushStatus(expectedTypes, matchedTypes)
-      statusByRow[resolveRowKey(record, index)] = pushStatus
+      statusByRow[rowKey] = pushStatus
 
       if (pushStatus.key === 'synced') resultSummary.syncedRows += 1
       if (pushStatus.key === 'partial') resultSummary.partialRows += 1
@@ -489,7 +575,7 @@ export default function Report() {
   }
 
   async function checkPushStatusData() {
-    if (records.length === 0) {
+    if (displayRows.length === 0) {
       toast.error('Không có dữ liệu báo cáo để kiểm tra')
       return
     }
@@ -497,7 +583,7 @@ export default function Report() {
     setCheckingData(true)
     try {
       const onlineEventKeys = await collectOnlineEventKeys(records)
-      const { statusByRow, resultSummary } = buildPushStatusMap(records, onlineEventKeys)
+      const { statusByRow, resultSummary } = buildPushStatusMap(displayRows, onlineEventKeys)
       setPushStatusByRow(statusByRow)
       setCheckSummary({
         ...resultSummary,
@@ -707,6 +793,18 @@ export default function Report() {
               <option value="asc">Tăng dần</option>
             </select>
           </div>
+
+          <div>
+            <label className="block text-xs font-medium text-slate-500 mb-1.5 uppercase tracking-wide">Chế độ xem thời gian</label>
+            <select
+              value={attendanceViewMode}
+              onChange={event => setAttendanceViewMode(event.target.value)}
+              className="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-sm bg-white focus:ring-2 focus:ring-primary-500/20 focus:border-primary-400"
+            >
+              <option value={ATTENDANCE_VIEW_MODES.checkinCheckout}>Checkin/Checkout</option>
+              <option value={ATTENDANCE_VIEW_MODES.attendanceRecord}>Ghi chấm công</option>
+            </select>
+          </div>
         </div>
 
         <div className="flex flex-wrap gap-2">
@@ -749,8 +847,10 @@ export default function Report() {
 
         <div className="grid sm:grid-cols-2 xl:grid-cols-4 gap-3">
           <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
-            <p className="text-xs uppercase tracking-wide text-slate-500">Tổng bản ghi</p>
-            <p className="mt-1 text-2xl font-bold text-slate-800">{summary.total_records || 0}</p>
+            <p className="text-xs uppercase tracking-wide text-slate-500">
+              {showCheckinCheckoutColumns ? 'Tổng bản ghi' : 'Tổng lần ghi chấm công'}
+            </p>
+            <p className="mt-1 text-2xl font-bold text-slate-800">{displayRows.length}</p>
           </div>
           <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
             <p className="text-xs uppercase tracking-wide text-slate-500">Nhân viên</p>
@@ -793,10 +893,19 @@ export default function Report() {
                     <th className="px-4 py-3 text-left font-medium text-slate-600">Họ tên</th>
                     <th className="px-4 py-3 text-left font-medium text-slate-600">Mã NV</th>
                     <th className="px-4 py-3 text-left font-medium text-slate-600">Phòng ban</th>
-                    <th className="px-4 py-3 text-left font-medium text-slate-600">Giờ vào</th>
-                    <th className="px-4 py-3 text-left font-medium text-slate-600">Giờ ra</th>
-                    <th className="px-4 py-3 text-left font-medium text-slate-600">Vị trí checkin</th>
-                    <th className="px-4 py-3 text-left font-medium text-slate-600">Vị trí checkout</th>
+                    {showCheckinCheckoutColumns ? (
+                      <>
+                        <th className="px-4 py-3 text-left font-medium text-slate-600">Giờ vào</th>
+                        <th className="px-4 py-3 text-left font-medium text-slate-600">Giờ ra</th>
+                        <th className="px-4 py-3 text-left font-medium text-slate-600">Vị trí checkin</th>
+                        <th className="px-4 py-3 text-left font-medium text-slate-600">Vị trí checkout</th>
+                      </>
+                    ) : (
+                      <>
+                        <th className="px-4 py-3 text-left font-medium text-slate-600">Thời gian ghi chấm công</th>
+                        <th className="px-4 py-3 text-left font-medium text-slate-600">Vị trí ghi chấm công</th>
+                      </>
+                    )}
                     <th className="px-4 py-3 text-left font-medium text-slate-600">Trạng thái</th>
                     <th className="px-4 py-3 text-left font-medium text-slate-600">Trạng thái đẩy</th>
                   </tr>
@@ -805,20 +914,31 @@ export default function Report() {
                   {paginatedRecords.map((record, index) => {
                     const pushStatus = getRowPushStatus(record, index)
                     return (
-                      <tr key={`${record.attendance_id}-${index}`} className="hover:bg-slate-50">
+                      <tr key={record.row_key || `${record.attendance_id}-${index}`} className="hover:bg-slate-50">
                         <td className="px-4 py-3 text-slate-400">{(page - 1) * pageSize + index + 1}</td>
                         <td className="px-4 py-3 text-slate-600">{record.date_display || record.date || '-'}</td>
                         <td className="px-4 py-3 font-medium text-slate-800">{record.name || '-'}</td>
                         <td className="px-4 py-3 text-slate-600">{record.employee_id || '-'}</td>
                         <td className="px-4 py-3 text-slate-600">{record.department || '-'}</td>
-                        <td className="px-4 py-3 text-slate-600">{record.check_in_time || '-'}</td>
-                        <td className="px-4 py-3 text-slate-600">{record.check_out_time || '-'}</td>
-                        <td className="px-4 py-3 text-slate-600 max-w-[260px] whitespace-normal break-words">
-                          {describeLocationText(record.check_in_location)}
-                        </td>
-                        <td className="px-4 py-3 text-slate-600 max-w-[260px] whitespace-normal break-words">
-                          {describeLocationText(record.check_out_location)}
-                        </td>
+                        {showCheckinCheckoutColumns ? (
+                          <>
+                            <td className="px-4 py-3 text-slate-600">{record.check_in_time || '-'}</td>
+                            <td className="px-4 py-3 text-slate-600">{record.check_out_time || '-'}</td>
+                            <td className="px-4 py-3 text-slate-600 max-w-[260px] whitespace-normal break-words">
+                              {describeLocationText(record.check_in_location)}
+                            </td>
+                            <td className="px-4 py-3 text-slate-600 max-w-[260px] whitespace-normal break-words">
+                              {describeLocationText(record.check_out_location)}
+                            </td>
+                          </>
+                        ) : (
+                          <>
+                            <td className="px-4 py-3 text-slate-600">{record.attendance_event_time || '-'}</td>
+                            <td className="px-4 py-3 text-slate-600 max-w-[260px] whitespace-normal break-words">
+                              {describeLocationText(record.attendance_event_location)}
+                            </td>
+                          </>
+                        )}
                         <td className="px-4 py-3">
                           <span className={`inline-flex px-2.5 py-1 rounded-full text-xs font-medium border ${getStatusTone(record.status_key)}`}>
                             {record.status || '-'}
@@ -840,7 +960,7 @@ export default function Report() {
               {paginatedRecords.map((record, index) => {
                 const pushStatus = getRowPushStatus(record, index)
                 return (
-                  <div key={`${record.attendance_id}-${index}`} className="px-4 py-4 sm:px-5">
+                  <div key={record.row_key || `${record.attendance_id}-${index}`} className="px-4 py-4 sm:px-5">
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
                         <p className="font-semibold text-slate-800 truncate">{record.name || '-'}</p>
@@ -861,10 +981,19 @@ export default function Report() {
                     </div>
 
                     <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-slate-600">
-                      <p>Giờ vào: {record.check_in_time || '-'}</p>
-                      <p>Giờ ra: {record.check_out_time || '-'}</p>
-                      <p className="col-span-2">Checkin: {describeLocationText(record.check_in_location)}</p>
-                      <p className="col-span-2">Checkout: {describeLocationText(record.check_out_location)}</p>
+                      {showCheckinCheckoutColumns ? (
+                        <>
+                          <p>Giờ vào: {record.check_in_time || '-'}</p>
+                          <p>Giờ ra: {record.check_out_time || '-'}</p>
+                          <p className="col-span-2">Checkin: {describeLocationText(record.check_in_location)}</p>
+                          <p className="col-span-2">Checkout: {describeLocationText(record.check_out_location)}</p>
+                        </>
+                      ) : (
+                        <>
+                          <p className="col-span-2">Thời gian ghi chấm công: {record.attendance_event_time || '-'}</p>
+                          <p className="col-span-2">Vị trí ghi chấm công: {describeLocationText(record.attendance_event_location)}</p>
+                        </>
+                      )}
                     </div>
                   </div>
                 )
@@ -889,7 +1018,7 @@ export default function Report() {
                     <option value={50}>50</option>
                     <option value={100}>100</option>
                   </select>
-                  <span className="text-sm text-slate-500">trên tổng {records.length}</span>
+                  <span className="text-sm text-slate-500">trên tổng {displayRows.length}</span>
                 </div>
 
                 {totalPages > 1 && (

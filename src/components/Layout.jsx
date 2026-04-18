@@ -18,6 +18,7 @@ import {
   MODULE_TOGGLE_KEYS,
   getModuleVisibility,
 } from '../services/moduleSettings'
+import { syncSystemSettingsFromServer } from '../services/systemSettingsStore'
 
 const navItems = [
   { to: ROUTES.dashboard, label: 'Trang chủ', icon: Home },
@@ -72,6 +73,14 @@ export default function Layout() {
       clearInterval(sessionInterval)
     }
   }, [])
+
+  useEffect(() => {
+    if (!authState.authenticated) {
+      return
+    }
+
+    syncSystemSettingsFromServer()
+  }, [authState.authenticated])
 
   useEffect(() => {
     function handleSessionExpired() {

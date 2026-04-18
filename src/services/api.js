@@ -20,6 +20,7 @@ import { cameraApi } from './modules/camera'
 import { attendanceApi } from './modules/attendance'
 import { employeeApi } from './modules/employee'
 import { locationApi } from './modules/location'
+import { systemSettingsApi } from './modules/systemSettings'
 import { request } from './request'
 
 /**
@@ -46,4 +47,7 @@ export const api = {
 
   // Location
   ...locationApi,
+
+  // System settings
+  ...systemSettingsApi,
 }

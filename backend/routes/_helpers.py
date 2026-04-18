@@ -10,6 +10,7 @@ import io
 import base64
 import secrets
 import time
+import re
 from datetime import datetime
 from functools import wraps
 from urllib.parse import quote
@@ -321,18 +322,29 @@ def parse_location_payload(payload):
 def location_to_text(location_payload):
     if not isinstance(location_payload, dict):
         return ''
+
+    coordinate_suffix_pattern = re.compile(
+        r'\s*\(\s*-?\d+(?:\.\d+)?\s*,\s*-?\d+(?:\.\d+)?(?:\s*(?:±|\+/-|[+-])?\s*\d+(?:\.\d+)?m)?\s*\)\s*$',
+        flags=re.IGNORECASE,
+    )
+
+    def _strip_coordinate_suffix(text):
+        if not isinstance(text, str):
+            return ''
+        return coordinate_suffix_pattern.sub('', text).strip()
+
     location_payload = enrich_location_payload(location_payload) or location_payload
     lat = location_payload.get('latitude')
     lng = location_payload.get('longitude')
     if lat is None or lng is None:
         return ''
     accuracy = location_payload.get('accuracy')
-    label = (location_payload.get('label') or location_payload.get('address') or '').strip()
+    label = _strip_coordinate_suffix(location_payload.get('label') or location_payload.get('address') or '')
+    if label:
+        return label
     base = f"{lat:.6f}, {lng:.6f}"
     if accuracy is not None:
         base += f" ±{accuracy:.0f}m"
-    if label:
-        return f"{label} ({base})"
     return base
 
 

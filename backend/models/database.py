@@ -110,6 +110,17 @@ class EmployeeImage(db.Model):
         return f'<EmployeeImage employee_id={self.employee_id} token={self.image_token}>'
 
 
+class SystemSetting(db.Model):
+    __tablename__ = 'system_settings'
+
+    key = db.Column(db.String(100), primary_key=True)
+    value = db.Column(db.Text, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def __repr__(self):
+        return f'<SystemSetting key={self.key}>'
+
+
 def ensure_database_schema():
     inspector = inspect(db.engine)
     if 'employee_images' not in inspector.get_table_names():

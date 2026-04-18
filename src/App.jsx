@@ -18,6 +18,7 @@ import {
   MODULE_TOGGLE_KEYS,
   isModuleEnabled,
 } from './services/moduleSettings'
+import { syncSystemSettingsFromServer } from './services/systemSettingsStore'
 
 function ModuleGate({ moduleKey, children }) {
   const [enabled, setEnabled] = useState(() => isModuleEnabled(moduleKey))
@@ -27,6 +28,7 @@ function ModuleGate({ moduleKey, children }) {
       setEnabled(isModuleEnabled(moduleKey))
     }
 
+    syncSystemSettingsFromServer()
     refreshModuleState()
     window.addEventListener(MODULE_SETTINGS_EVENT, refreshModuleState)
     window.addEventListener('storage', refreshModuleState)

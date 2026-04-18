@@ -22,10 +22,15 @@ function buildReportQuery(input) {
 }
 
 export const attendanceApi = {
-  checkAttendance: (userId, location = null, attendanceType = 'checkin') => request('/api/check_attendance', {
+  checkAttendance: (userId, location = null, attendanceType = 'checkin', options = null) => request('/api/check_attendance', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ user_id: userId, location, attendance_type: attendanceType }),
+    body: JSON.stringify({
+      user_id: userId,
+      location,
+      attendance_type: attendanceType,
+      ...(options && typeof options === 'object' ? options : {}),
+    }),
   }),
 
   attendanceImage: (formData) => request('/api/attendance_image', {
