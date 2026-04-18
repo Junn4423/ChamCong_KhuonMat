@@ -7,7 +7,7 @@ from datetime import datetime, date
 
 from flask import Blueprint, request, jsonify, g, Response
 
-from backend.models.database import db, User, Attendance
+from backend.models.database import db, User, Attendance, EmployeeImage
 from backend.face_encoding_utils import face_encoding_count, normalize_face_encodings
 from backend.services.erp_http_client import ERPServiceError, erp_http_client
 from backend.services.import_employees import ERPImporter
@@ -23,6 +23,84 @@ from backend.routes._helpers import (
 )
 
 employee_bp = Blueprint('employee', __name__)
+
+SYNC_COMPARE_FIELDS = (
+    ('name', 'Họ tên'),
+    ('department', 'Phòng ban'),
+    ('position', 'Vị trí'),
+)
+
+
+def _safe_compare_text(value):
+    return str(value or '').strip()
+
+
+def _normalize_compare_text(value):
+    return _safe_compare_text(value).casefold()
+
+
+def _build_profile_differences(local_user, erp_employee):
+    differences = []
+    for field_name, field_label in SYNC_COMPARE_FIELDS:
+        local_value = _safe_compare_text(getattr(local_user, field_name, ''))
+        erp_value = _safe_compare_text((erp_employee or {}).get(field_name, ''))
+        if _normalize_compare_text(local_value) != _normalize_compare_text(erp_value):
+            differences.append({
+                'field': field_name,
+                'label': field_label,
+                'system_value': local_value,
+                'erp_value': erp_value,
+            })
+    return differences
+
+
+def _build_face_mismatch(employee_id, local_user, erp_employee, image_row=None):
+    erp_image_token = _safe_compare_text((erp_employee or {}).get('image_token', ''))
+    system_image_token = _safe_compare_text(getattr(image_row, 'erp_image_token', ''))
+    local_image_token = _safe_compare_text(getattr(image_row, 'image_token', ''))
+    has_local_image = bool(local_image_token)
+
+    token_same = bool(erp_image_token and system_image_token and erp_image_token == system_image_token)
+    if token_same:
+        return None
+
+    if not erp_image_token and not system_image_token and not has_local_image:
+        return None
+
+    reasons = []
+    if erp_image_token and system_image_token and erp_image_token != system_image_token:
+        reasons.append('Token ảnh giữa ERP và hệ thống khác nhau.')
+    if erp_image_token and not system_image_token:
+        reasons.append('ERP có token ảnh nhưng hệ thống chưa lưu token tham chiếu tương ứng.')
+    if system_image_token and not erp_image_token:
+        reasons.append('Hệ thống có token tham chiếu ảnh nhưng ERP đang trống token.')
+    if has_local_image and not erp_image_token:
+        reasons.append('Hệ thống có ảnh local nhưng ERP chưa có token ảnh.')
+    if erp_image_token and not has_local_image:
+        reasons.append('ERP có token ảnh nhưng hệ thống chưa có ảnh local.')
+
+    can_push_local_to_erp = has_local_image
+    can_pull_erp_to_system = bool(local_user is not None and erp_image_token)
+
+    direction_hint = 'review'
+    if can_push_local_to_erp and not can_pull_erp_to_system:
+        direction_hint = 'push_local_to_erp'
+    elif can_pull_erp_to_system and not can_push_local_to_erp:
+        direction_hint = 'pull_erp_to_system'
+
+    return {
+        'employee_id': employee_id,
+        'name': _safe_compare_text((erp_employee or {}).get('name')) or _safe_compare_text(getattr(local_user, 'name', '')),
+        'department': _safe_compare_text((erp_employee or {}).get('department')) or _safe_compare_text(getattr(local_user, 'department', '')),
+        'erp_image_token': erp_image_token,
+        'system_image_token': system_image_token,
+        'local_image_token': local_image_token,
+        'has_local_image': has_local_image,
+        'can_push_local_to_erp': can_push_local_to_erp,
+        'can_pull_erp_to_system': can_pull_erp_to_system,
+        'direction_hint': direction_hint,
+        'reasons': reasons,
+    }
 
 
 @employee_bp.route('/api/image/token/<string:image_token>')
@@ -115,6 +193,85 @@ def api_erp_employees():
         return jsonify({'success': False, 'message': exc.message, 'employees': []}), (exc.status_code or 500)
     except Exception as exc:
         return jsonify({'success': False, 'message': str(exc), 'employees': []}), 500
+
+
+@employee_bp.route('/api/erp/sync_compare')
+@session_required
+def api_erp_sync_compare():
+    try:
+        erp_employees = erp_http_client.list_employees(g.erp_auth)
+        local_users = {u.employee_id: u for u in User.query.all()}
+        local_images = {row.employee_id: row for row in EmployeeImage.query.all()}
+
+        new_employees = []
+        profile_mismatches = []
+        face_mismatches = []
+
+        for emp in erp_employees:
+            employee_id = _safe_compare_text(emp.get('employee_id'))
+            if not employee_id:
+                continue
+
+            local_user = local_users.get(employee_id)
+            if local_user is None:
+                new_employees.append({
+                    'employee_id': employee_id,
+                    'name': _safe_compare_text(emp.get('name')),
+                    'department': _safe_compare_text(emp.get('department')),
+                    'position': _safe_compare_text(emp.get('position')),
+                    'erp_image_token': _safe_compare_text(emp.get('image_token')),
+                    'erp_image_url': _safe_compare_text(emp.get('image_url')),
+                })
+                continue
+
+            differences = _build_profile_differences(local_user, emp)
+            if differences:
+                profile_mismatches.append({
+                    'employee_id': employee_id,
+                    'erp': {
+                        'name': _safe_compare_text(emp.get('name')),
+                        'department': _safe_compare_text(emp.get('department')),
+                        'position': _safe_compare_text(emp.get('position')),
+                    },
+                    'system': {
+                        'name': _safe_compare_text(local_user.name),
+                        'department': _safe_compare_text(local_user.department),
+                        'position': _safe_compare_text(local_user.position),
+                    },
+                    'differences': differences,
+                })
+
+            face_diff = _build_face_mismatch(
+                employee_id,
+                local_user,
+                emp,
+                image_row=local_images.get(employee_id),
+            )
+            if face_diff:
+                face_mismatches.append(face_diff)
+
+        new_employees.sort(key=lambda item: item.get('employee_id') or '')
+        profile_mismatches.sort(key=lambda item: item.get('employee_id') or '')
+        face_mismatches.sort(key=lambda item: item.get('employee_id') or '')
+
+        return jsonify({
+            'success': True,
+            'generated_at': datetime.utcnow().isoformat(),
+            'summary': {
+                'erp_total': len(erp_employees),
+                'system_total': len(local_users),
+                'new_count': len(new_employees),
+                'profile_mismatch_count': len(profile_mismatches),
+                'face_mismatch_count': len(face_mismatches),
+            },
+            'new_employees': new_employees,
+            'profile_mismatches': profile_mismatches,
+            'face_mismatches': face_mismatches,
+        })
+    except ERPServiceError as exc:
+        return jsonify({'success': False, 'message': exc.message}), (exc.status_code or 500)
+    except Exception as exc:
+        return jsonify({'success': False, 'message': str(exc)}), 500
 
 
 @employee_bp.route('/api/erp/import_all', methods=['POST'])

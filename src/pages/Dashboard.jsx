@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { api } from '../services/api'
 
 function formatStorageSize(storageMb) {
-  if (typeof storageMb !== 'number' || Number.isNaN(storageMb)) return '-'
+  if (typeof storageMb !== 'number' || Number.isNaN(storageMb)) return '0 MB'
   if (storageMb >= 1024) {
     return `${(storageMb / 1024).toFixed(2)} GB`
   }
@@ -43,22 +43,22 @@ export default function Dashboard() {
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard
           label="Tổng nhân viên"
-          value={stats?.total_employees ?? '-'}
+          value={stats?.total_employees ?? 0}
           color="blue"
         />
         <StatCard
           label="Có mặt hôm nay"
-          value={stats?.present_today ?? '-'}
+          value={stats?.present_today ?? 0}
           color="green"
         />
         <StatCard
           label="Đi trễ"
-          value={stats?.late_today ?? '-'}
+          value={stats?.late_today ?? 0}
           color="yellow"
         />
         <StatCard
           label="Vắng mặt"
-          value={stats?.absent_today ?? '-'}
+          value={stats?.absent_today ?? 0}
           color="red"
         />
       </div>
@@ -74,13 +74,13 @@ export default function Dashboard() {
         <div className="p-5 grid grid-cols-2 xl:grid-cols-4 gap-4">
           <StatCard
             label="Nhân viên lưu trữ"
-            value={systemStats?.employee_count ?? '-'}
+            value={systemStats?.employee_count ?? 0}
             hint={systemStats ? `${systemStats.face_sample_count || 0} mẫu khuôn mặt AI` : ''}
             color="slate"
           />
           <StatCard
             label="Ảnh khuôn mặt"
-            value={systemStats?.face_image_count ?? '-'}
+            value={systemStats?.face_image_count ?? 0}
             hint="Ảnh gốc đang lưu local"
             color="indigo"
           />
@@ -92,7 +92,7 @@ export default function Dashboard() {
           />
           <StatCard
             label="Camera chấm công"
-            value={systemStats?.camera_count ?? '-'}
+            value={systemStats?.camera_count ?? 0}
             hint={systemStats ? `${systemStats.enabled_camera_count || 0} camera đang bật` : ''}
             color="amber"
           />
@@ -145,7 +145,7 @@ function StatCard({ label, value, color, hint = '' }) {
   return (
     <div className={`rounded-xl border p-4 ${colors[color]}`}>
       <p className="text-sm font-medium opacity-75">{label}</p>
-      <p className="text-3xl font-bold mt-1">{value}</p>
+      <p className="text-3xl font-bold mt-1 notranslate" translate="no">{value}</p>
       {hint && <p className="text-xs opacity-75 mt-2 break-all">{hint}</p>}
     </div>
   )

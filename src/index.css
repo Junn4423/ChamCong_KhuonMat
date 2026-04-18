@@ -108,3 +108,46 @@ body {
     max-width: none;
   }
 }
+
+/* Google Translate custom mode: hide default toolbar/plugin chrome */
+html.translated-ltr,
+html.translated-rtl,
+body.translated-ltr,
+body.translated-rtl {
+  margin-top: 0 !important;
+  top: 0 !important;
+}
+
+body {
+  top: 0 !important;
+}
+
+iframe.goog-te-banner-frame,
+.goog-te-banner-frame.skiptranslate,
+.goog-te-banner-frame,
+body > .skiptranslate,
+.goog-te-gadget-icon,
+.goog-logo-link,
+.goog-te-gadget span,
+#goog-gt-tt,
+.goog-tooltip,
+.goog-tooltip:hover {
+  display: none !important;
+  visibility: hidden !important;
+}
+
+.goog-text-highlight {
+  background-color: transparent !important;
+  box-shadow: none !important;
+}
+
+#google_translate_element_hidden {
+  position: absolute;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+}
+
+.notranslate {
+  unicode-bidi: plaintext;
+}

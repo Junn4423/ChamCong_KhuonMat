@@ -7,6 +7,8 @@ export const employeeApi = {
   // --- ERP ---
   getErpEmployees: () => request('/api/erp/employees'),
 
+  getSyncCompare: () => request('/api/erp/sync_compare'),
+
   importAllFromErp: (payload = {}) => request('/api/erp/import_all', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

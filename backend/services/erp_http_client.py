@@ -50,6 +50,47 @@ from backend.services.errors import ERPServiceError
 
 
 class ERPHttpClient:
+    @staticmethod
+    def _build_url_candidates(url, default_scheme='http'):
+        text = str(url or '').strip()
+        if not text:
+            return []
+
+        parsed = urlparse(text)
+        scheme = (parsed.scheme or '').strip().lower()
+
+        if scheme in {'http', 'https'} and parsed.netloc:
+            return [text]
+
+        if text.startswith('//'):
+            host_path = text.lstrip('/')
+        elif scheme in {'http', 'https'} and not parsed.netloc:
+            host_path = (parsed.path or '').lstrip('/')
+        elif '://' in text:
+            host_path = text.split('://', 1)[1].lstrip('/')
+        else:
+            host_path = text.lstrip('/')
+
+        if not host_path:
+            return []
+
+        primary = default_scheme if default_scheme in {'http', 'https'} else 'http'
+        secondary = 'https' if primary == 'http' else 'http'
+
+        candidates = [f'{primary}://{host_path}', f'{secondary}://{host_path}']
+        unique = []
+        for candidate in candidates:
+            if candidate not in unique:
+                unique.append(candidate)
+        return unique
+
+    @staticmethod
+    def _normalize_absolute_url(url, default_scheme='http'):
+        candidates = ERPHttpClient._build_url_candidates(url, default_scheme=default_scheme)
+        if not candidates:
+            return ''
+        return candidates[0]
+
     def __init__(
         self,
         service_url=None,
@@ -76,8 +117,14 @@ class ERPHttpClient:
         token_register_api_token=None,
         token_column=None,
     ):
-        self.service_url = service_url or ERP_HTTP_SERVICE_URL
-        self.login_url = login_url or ERP_HTTP_LOGIN_URL
+        self.service_url = self._normalize_absolute_url(
+            service_url or ERP_HTTP_SERVICE_URL,
+            default_scheme='http',
+        )
+        self.login_url = self._normalize_absolute_url(
+            login_url or ERP_HTTP_LOGIN_URL,
+            default_scheme='http',
+        )
         self.timeout = timeout or ERP_HTTP_TIMEOUT
         self.image_column = image_column or ERP_HTTP_IMAGE_COLUMN
         self.sof_dev_token = (sof_dev_token or ERP_HTTP_SOF_DEV_TOKEN or '').strip()
@@ -126,6 +173,10 @@ class ERPHttpClient:
             or ERP_HTTP_TOKEN_REGISTER_URL
             or 'http://192.168.1.87/createtoken/index.php'
         ).strip()
+        self.token_register_url = self._normalize_absolute_url(
+            self.token_register_url,
+            default_scheme='http',
+        )
         self.token_register_username = (
             token_register_username
             or ERP_HTTP_TOKEN_REGISTER_USERNAME
@@ -1133,10 +1184,9 @@ class ERPHttpClient:
         if method not in {'http', 'https'}:
             method = 'http'
 
-        candidate = domain.strip()
-        parsed = urlparse(candidate)
-        if not parsed.scheme:
-            candidate = f'{method}://{candidate.lstrip("/")}'
+        candidate = self._normalize_absolute_url(domain.strip(), default_scheme=method)
+        if not candidate:
+            return self.service_url
 
         candidate = candidate.rstrip('/')
         lower_candidate = candidate.lower()
@@ -1431,29 +1481,62 @@ class ERPHttpClient:
         return self._parse_json(raw)
 
     def _open(self, url, data=None, headers=None, method=None):
-        req = request.Request(
-            url,
-            data=data,
-            headers=headers or {},
-            method=method or ('POST' if data is not None else 'GET'),
-        )
-        try:
-            with request.urlopen(req, timeout=self.timeout) as response:
-                return response.read(), response.headers
-        except HTTPError as exc:
-            body = exc.read()
-            payload = None
-            message = body.decode('utf-8', errors='ignore').strip() or str(exc)
-            if 'application/json' in (exc.headers.get('Content-Type') or ''):
-                try:
-                    payload = self._parse_json(body)
-                    if isinstance(payload, dict):
-                        message = payload.get('message') or payload.get('error') or message
-                except ERPServiceError:
-                    payload = None
-            raise ERPServiceError(message, status_code=exc.code, payload=payload) from exc
-        except URLError as exc:
-            raise ERPServiceError(f'Khong the ket noi ERP service: {exc.reason}') from exc
+        url_candidates = self._build_url_candidates(url, default_scheme='http')
+        if not url_candidates:
+            raise ERPServiceError('URL ERP khong hop le hoac dang de trong')
+
+        last_url_error = None
+        for index, normalized_url in enumerate(url_candidates):
+            req = request.Request(
+                normalized_url,
+                data=data,
+                headers=headers or {},
+                method=method or ('POST' if data is not None else 'GET'),
+            )
+            try:
+                with request.urlopen(req, timeout=self.timeout) as response:
+                    return response.read(), response.headers
+            except HTTPError as exc:
+                body = exc.read()
+                payload = None
+                message = body.decode('utf-8', errors='ignore').strip() or str(exc)
+                if 'application/json' in (exc.headers.get('Content-Type') or ''):
+                    try:
+                        payload = self._parse_json(body)
+                        if isinstance(payload, dict):
+                            message = payload.get('message') or payload.get('error') or message
+                    except ERPServiceError:
+                        payload = None
+                raise ERPServiceError(message, status_code=exc.code, payload=payload) from exc
+            except URLError as exc:
+                last_url_error = exc
+                if index < len(url_candidates) - 1:
+                    continue
+
+                reason_text = str(exc.reason or '').strip()
+                if 'unknown url type' in reason_text.lower():
+                    raise ERPServiceError(
+                        f'URL ERP khong hop le: {url}. Vui long them http:// hoac https://',
+                    ) from exc
+
+                if len(url_candidates) > 1:
+                    attempted = ' / '.join(url_candidates)
+                    raise ERPServiceError(
+                        f'Khong the ket noi ERP service (da thu {attempted}): {exc.reason}',
+                    ) from exc
+
+                raise ERPServiceError(f'Khong the ket noi ERP service: {exc.reason}') from exc
+            except ValueError as exc:
+                last_url_error = exc
+                if index < len(url_candidates) - 1:
+                    continue
+                raise ERPServiceError(
+                    f'URL ERP khong hop le: {url}. Vui long them http:// hoac https://',
+                ) from exc
+
+        if last_url_error:
+            raise ERPServiceError(f'Khong the ket noi ERP service: {last_url_error}') from last_url_error
+        raise ERPServiceError('Khong the ket noi ERP service')
 
     def _parse_json(self, raw):
         try:

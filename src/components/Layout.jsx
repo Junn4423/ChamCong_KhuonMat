@@ -1,15 +1,32 @@
 import { NavLink, Navigate, Outlet, useLocation } from 'react-router-dom'
 import { useEffect, useState } from 'react'
 import { api, clearSessionToken, SESSION_EXPIRED_EVENT } from '../services/api'
-import { Home, Camera, UserPlus, Video, Settings, BarChart } from 'lucide-react'
+import {
+  Home,
+  Camera,
+  UserPlus,
+  Video,
+  Settings,
+  BarChart,
+  Shuffle,
+  Users,
+} from 'lucide-react'
+import { ROUTES } from '../config/routes'
+import {
+  MODULE_SETTINGS_EVENT,
+  MODULE_TOGGLE_KEYS,
+  getModuleVisibility,
+} from '../services/moduleSettings'
 
 const navItems = [
-  { to: '/', label: 'Trang chủ', icon: Home },
-  { to: '/attendance', label: 'Điểm danh', icon: Camera },
-  { to: '/cameras', label: 'Camera', icon: Video },
-  { to: '/dong-bo-nhan-vien-online', label: 'Đồng bộ nhân viên online', icon: UserPlus },
-  { to: '/quan-ly-nhan-vien-offline', label: 'Quản lý nhân viên offline', icon: Settings },
-  { to: '/report', label: 'Báo cáo', icon: BarChart },
+  { to: ROUTES.dashboard, label: 'Trang chủ', icon: Home },
+  { to: ROUTES.attendance, label: 'Điểm danh', icon: Camera, moduleKey: MODULE_TOGGLE_KEYS.attendance },
+  { to: ROUTES.cameraManagement, label: 'Quản lý camera', icon: Video, moduleKey: MODULE_TOGGLE_KEYS.cameraManagement },
+  { to: ROUTES.onlineSync, label: 'Đồng bộ nhân viên online', icon: UserPlus, moduleKey: MODULE_TOGGLE_KEYS.onlineSync },
+  { to: ROUTES.syncVerify, label: 'Xử lý đồng bộ', icon: Shuffle, moduleKey: MODULE_TOGGLE_KEYS.syncVerify },
+  { to: ROUTES.offlineManage, label: 'Quản lý nhân viên offline', icon: Users, moduleKey: MODULE_TOGGLE_KEYS.offlineManage },
+  { to: ROUTES.report, label: 'Báo cáo', icon: BarChart, moduleKey: MODULE_TOGGLE_KEYS.report },
+  { to: ROUTES.systemSettings, label: 'Cài đặt hệ thống', icon: Settings },
 ]
 
 const routedSystemNames = {
@@ -24,6 +41,7 @@ const routedSystemNames = {
 
 export default function Layout() {
   const [apiStatus, setApiStatus] = useState('checking')
+  const [moduleVisibility, setModuleVisibility] = useState(() => getModuleVisibility())
   const [sidebarOpen, setSidebarOpen] = useState(() => {
     const saved = localStorage.getItem('sidebarOpen')
     if (saved !== null) return saved === 'true'
@@ -55,6 +73,58 @@ export default function Layout() {
 
     window.addEventListener(SESSION_EXPIRED_EVENT, handleSessionExpired)
     return () => window.removeEventListener(SESSION_EXPIRED_EVENT, handleSessionExpired)
+  }, [])
+
+  useEffect(() => {
+    function refreshModuleVisibility() {
+      setModuleVisibility(getModuleVisibility())
+    }
+
+    refreshModuleVisibility()
+    window.addEventListener(MODULE_SETTINGS_EVENT, refreshModuleVisibility)
+    window.addEventListener('storage', refreshModuleVisibility)
+    return () => {
+      window.removeEventListener(MODULE_SETTINGS_EVENT, refreshModuleVisibility)
+      window.removeEventListener('storage', refreshModuleVisibility)
+    }
+  }, [])
+
+  useEffect(() => {
+    function hideTranslateToolbar() {
+      if (typeof document === 'undefined') {
+        return
+      }
+
+      document.body.style.setProperty('top', '0px', 'important')
+      document.documentElement.style.setProperty('top', '0px', 'important')
+
+      const toolbarNodes = document.querySelectorAll(
+        'iframe.goog-te-banner-frame, .goog-te-banner-frame, body > .skiptranslate',
+      )
+
+      toolbarNodes.forEach(node => {
+        if (node.id === 'google_translate_element_hidden') {
+          return
+        }
+        node.style.setProperty('display', 'none', 'important')
+        node.style.setProperty('visibility', 'hidden', 'important')
+        node.style.setProperty('height', '0px', 'important')
+        node.style.setProperty('min-height', '0px', 'important')
+        node.style.setProperty('width', '0px', 'important')
+        node.style.setProperty('opacity', '0', 'important')
+        node.style.setProperty('pointer-events', 'none', 'important')
+      })
+    }
+
+    hideTranslateToolbar()
+    const interval = setInterval(hideTranslateToolbar, 450)
+    const observer = new MutationObserver(() => hideTranslateToolbar())
+    observer.observe(document.documentElement, { childList: true, subtree: true })
+
+    return () => {
+      clearInterval(interval)
+      observer.disconnect()
+    }
   }, [])
 
   useEffect(() => {
@@ -129,7 +199,7 @@ export default function Layout() {
   }
 
   if (!authState.authenticated) {
-    return <Navigate to="/login" replace />
+    return <Navigate to={ROUTES.login} replace />
   }
 
   const statusDot = {
@@ -145,6 +215,7 @@ export default function Layout() {
   const welcomeMessage = resolvedSystemName
     ? `Xin chào, đây là hệ thống chấm công ${resolvedSystemName}`
     : (authState.user?.welcome_message || '')
+  const visibleNavItems = navItems.filter(item => !item.moduleKey || moduleVisibility[item.moduleKey] !== false)
 
   return (
     <div className="relative min-h-dvh bg-slate-50 overflow-x-hidden">
@@ -177,7 +248,7 @@ export default function Layout() {
         </div>
 
         <nav className="flex-1 px-3 py-4 space-y-0.5 overflow-y-auto">
-          {navItems.map(item => (
+          {visibleNavItems.map(item => (
             <NavLink
               key={item.to}
               to={item.to}

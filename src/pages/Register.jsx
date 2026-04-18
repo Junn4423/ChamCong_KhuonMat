@@ -1,5 +1,5 @@
 ﻿import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { api, getSessionToken } from '../services/api'
 import { useToast } from '../components/Toast'
 import { Download, Eye, RotateCw, UserSquare } from 'lucide-react'
@@ -77,6 +77,7 @@ function EmployeeListAvatar({ imageUrl, name }) {
 
 export default function Register() {
   const { toast } = useToast()
+  const navigate = useNavigate()
   const [authMode, setAuthMode] = useState('system')
   const [erpEmployees, setErpEmployees] = useState([])
   const [selectedEmployeeIds, setSelectedEmployeeIds] = useState([])
@@ -483,7 +484,7 @@ export default function Register() {
 
       if (selectedEmployee.registered) {
         if (!selectedEmployee.user_id) {
-          toast.error('Kh?ng t?m th?y b?n ghi c?a nh?n vi?n trong h? th?ng ch?m c?ng')
+          toast.error('Không tìm thấy bản ghi của nhân viên trong hệ thống chấm công')
           setSubmitLoading(false)
           return
         }
@@ -509,7 +510,7 @@ export default function Register() {
         shouldPushErpToken = true
       } else {
         if (isInternalMode) {
-          toast.error('?ang ? ch? ?? n?i b?')
+          toast.error('Đang ở chế độ nội bộ')
           setSubmitLoading(false)
           return
         }
@@ -529,9 +530,9 @@ export default function Register() {
 
         if (pushRes && !pushRes.success) {
           toast.error(pushRes.message || 'Không thể đẩy token ảnh lên ERP')
-          toast.success((res.message || `${actionLabel} th?nh c?ng`) + '. Dữ liệu cục bộ đã cập nhật.')
+          toast.success((res.message || `${actionLabel} thành công`) + '. Dữ liệu cục bộ đã cập nhật.')
         } else {
-          toast.success(res.message || `${actionLabel} th?nh c?ng`)
+          toast.success(res.message || `${actionLabel} thành công`)
         }
 
         setImageFile(null)
@@ -539,7 +540,7 @@ export default function Register() {
         lastFetchedId.current = ''
         await loadErpEmployees(selectedEmployee.employee_id, { keepCurrentSelection: true })
       } else {
-        toast.error(res?.message || `${actionLabel} th?t b?i`)
+        toast.error(res?.message || `${actionLabel} thất bại`)
       }
     } catch {
       toast.error(
@@ -657,6 +658,15 @@ export default function Register() {
           >
             <RotateCw size={16} className={listLoading ? 'animate-spin' : ''} />
             {listLoading ? 'Đang đồng bộ...' : 'Đồng bộ data từ ERP'}
+          </button>
+
+          <button
+            onClick={() => navigate('/xu-ly-dong-bo?run=1')}
+            disabled={isInternalMode}
+            className="w-full sm:w-auto flex items-center justify-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-xl text-sm font-semibold hover:bg-indigo-700 disabled:opacity-50 transition-colors"
+          >
+            <Eye size={16} />
+            Đồng bộ và kiểm tra với hệ thống
           </button>
 
           <button

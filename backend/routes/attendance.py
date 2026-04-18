@@ -783,14 +783,14 @@ def api_report_push_to_erp():
     if resolve_request_auth_mode(default='internal') != 'system':
         return jsonify({
             'success': False,
-            'message': 'Dang o che do noi bo. Vui long dang nhap he thong de day du lieu.',
+            'message': 'Đang ở chế độ nội bộ. Vui lòng đăng nhập hệ thống để đẩy dữ liệu.',
         }), 403
 
     rows, normalized_filters, summary = build_report_rows(payload)
     if not rows:
         return jsonify({
             'success': True,
-            'message': 'Khong co du lieu diem danh de day len ERP',
+            'message': 'Không có dữ liệu điểm danh để đẩy lên ERP',
             'result': {
                 'start_date': normalized_filters['start_date'].strftime('%Y-%m-%d'),
                 'end_date': normalized_filters['end_date'].strftime('%Y-%m-%d'),
@@ -834,9 +834,9 @@ def api_report_push_to_erp():
 
     failed = len(failed_ids)
     total = total_events
-    message = f'Da day {pushed}/{total} ban ghi len ERP.'
+    message = f'Đã đẩy {pushed}/{total} bản ghi lên ERP.'
     if failed:
-        message += f' Co {failed} ban ghi that bai.'
+        message += f' Có {failed} bản ghi thất bại.'
 
     return jsonify({
         'success': failed == 0,

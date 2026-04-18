@@ -64,6 +64,17 @@ if not exist "node_modules" (
     call install.bat
 )
 
+echo [0/3] Checking Python dependency: openpyxl...
+py -3.10 -c "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec('openpyxl') else 1)" >nul 2>nul
+if errorlevel 1 (
+    echo [INFO] openpyxl is missing. Installing...
+    py -3.10 -m pip install openpyxl
+    if errorlevel 1 (
+        echo [WARNING] Could not install openpyxl automatically.
+        echo [WARNING] Excel export at /bao-cao may fail until openpyxl is installed.
+    )
+)
+
 echo [1/3] Starting Python Backend (port 5000)...
 start "FaceCheck Backend" cmd /k "py -3.10 run_backend.py --port 5000 --host %BACKEND_HOST%"
 

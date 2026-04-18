@@ -53,20 +53,10 @@ function describeLocationText(locationText) {
   const raw = String(locationText || '').trim()
   if (!raw) return '-'
 
-  const pattern = /^(.*?)\s*\(([-\d.]+),\s*([-\d.]+)(?:\s*[Â±+-](\d+)m)?\)$/i
-  const match = raw.match(pattern)
-  if (!match) return raw
-
-  const label = (match[1] || '').trim()
-  const lat = match[2]
-  const lng = match[3]
-  const accuracy = match[4]
-
-  const parts = []
-  if (label) parts.push(label)
-  parts.push(`${lat}, ${lng}`)
-  if (accuracy) parts.push(`±${accuracy}m`)
-  return parts.join(' | ')
+  // Legacy location payloads may include "address | lat,lng | ±accuracy".
+  // Report UI should only keep the first readable address segment.
+  const cleaned = raw.split('|')[0]?.trim() || ''
+  return cleaned || raw
 }
 
 function SystemLoginModal({
@@ -84,7 +74,7 @@ function SystemLoginModal({
     <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-4">
       <div className="w-full max-w-md bg-white rounded-2xl shadow-2xl overflow-hidden border border-slate-200">
         <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
-          <h2 className="text-base font-semibold text-slate-800">Dang nhap he thong</h2>
+          <h2 className="text-base font-semibold text-slate-800">Đăng nhập hệ thống</h2>
           <button
             onClick={onClose}
             className="w-8 h-8 rounded-lg bg-slate-100 text-slate-500 hover:bg-slate-200 flex items-center justify-center transition-colors"
@@ -96,7 +86,7 @@ function SystemLoginModal({
 
         <form onSubmit={onSubmit} className="p-5 space-y-4">
           <p className="text-sm text-slate-600">
-            De day du lieu cham cong len he thong, vui long dang nhap che do system.
+            Để đẩy dữ liệu chấm công lên hệ thống, vui lòng đăng nhập chế độ system.
           </p>
 
           {error && (
@@ -106,25 +96,25 @@ function SystemLoginModal({
           )}
 
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1.5">Tai khoan</label>
+            <label className="block text-sm font-medium text-slate-700 mb-1.5">Tài khoản</label>
             <input
               type="text"
               value={form.username}
               onChange={event => setForm(prev => ({ ...prev, username: event.target.value }))}
               className="w-full px-3 py-2.5 border border-slate-300 rounded-xl focus:ring-2 focus:ring-primary-500/30 focus:border-primary-500 text-sm"
-              placeholder="Nhap tai khoan"
+              placeholder="Nhập tài khoản"
               required
             />
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1.5">Mat khau</label>
+            <label className="block text-sm font-medium text-slate-700 mb-1.5">Mật khẩu</label>
             <input
               type="password"
               value={form.password}
               onChange={event => setForm(prev => ({ ...prev, password: event.target.value }))}
               className="w-full px-3 py-2.5 border border-slate-300 rounded-xl focus:ring-2 focus:ring-primary-500/30 focus:border-primary-500 text-sm"
-              placeholder="Nhap mat khau"
+              placeholder="Nhập mật khẩu"
               required
             />
           </div>
@@ -136,14 +126,14 @@ function SystemLoginModal({
               className="w-full sm:w-auto px-4 py-2 rounded-xl bg-slate-100 text-slate-600 text-sm font-medium hover:bg-slate-200 transition-colors"
               disabled={loading}
             >
-              Huy
+              Hủy
             </button>
             <button
               type="submit"
               disabled={loading}
               className="w-full sm:w-auto px-4 py-2 rounded-xl bg-primary-600 text-white text-sm font-medium hover:bg-primary-700 transition-colors disabled:opacity-50"
             >
-              {loading ? 'Dang dang nhap...' : 'Dang nhap va tiep tuc'}
+              {loading ? 'Đang đăng nhập...' : 'Đăng nhập và tiếp tục'}
             </button>
           </div>
         </form>
@@ -205,11 +195,11 @@ export default function Report() {
         setSummary(res.summary || { total_records: 0, unique_employees: 0 })
         setFilterDescription(res.filters?.description || '')
       } else {
-        toast.error(res.message || 'Khong tai duoc bao cao')
+        toast.error(res.message || 'Không tải được báo cáo')
       }
     } catch (error) {
       console.error(error)
-      toast.error(error?.message || 'Khong the ket noi backend')
+      toast.error(error?.message || 'Không thể kết nối backend')
     } finally {
       setLoading(false)
     }
@@ -233,9 +223,9 @@ export default function Report() {
     try {
       const { blob, filename } = await api.exportReportExcel(buildReportParams(filters))
       downloadBlob(blob, filename)
-      toast.success('Da xuat file Excel')
+      toast.success('Đã xuất file Excel')
     } catch (error) {
-      toast.error(error?.message || 'Khong xuat duoc file Excel')
+      toast.error(error?.message || 'Không xuất được file Excel')
     } finally {
       setExporting(false)
     }
@@ -246,12 +236,12 @@ export default function Report() {
     try {
       const res = await api.pushReportToErp(buildReportParams(filters))
       if (res.success) {
-        toast.success(res.message || 'Day du lieu ERP thanh cong')
+        toast.success(res.message || 'Đẩy dữ liệu ERP thành công')
       } else {
-        toast.error(res.message || 'Day du lieu ERP that bai')
+        toast.error(res.message || 'Đẩy dữ liệu ERP thất bại')
       }
     } catch (error) {
-      toast.error(error?.message || 'Khong the day du lieu diem danh len ERP')
+      toast.error(error?.message || 'Không thể đẩy dữ liệu điểm danh lên ERP')
     } finally {
       setPushing(false)
     }
@@ -274,17 +264,17 @@ export default function Report() {
     try {
       const res = await api.login(systemLoginForm.username, systemLoginForm.password, 'system')
       if (!res.success) {
-        setSystemLoginError(res.message || 'Dang nhap he thong that bai')
+        setSystemLoginError(res.message || 'Đăng nhập hệ thống thất bại')
         return
       }
 
       setSessionToken(res.token)
       setAuthMode('system')
       setShowSystemLoginModal(false)
-      toast.success('Dang nhap he thong thanh cong')
+      toast.success('Đăng nhập hệ thống thành công')
       await pushOfflineToOnline()
     } catch {
-      setSystemLoginError('Khong the dang nhap he thong')
+      setSystemLoginError('Không thể đăng nhập hệ thống')
     } finally {
       setSystemLoginLoading(false)
     }
@@ -307,13 +297,13 @@ export default function Report() {
       />
 
       <div>
-        <h1 className="text-2xl font-bold text-slate-800">Bao cao diem danh</h1>
+        <h1 className="text-2xl font-bold text-slate-800">Báo cáo điểm danh</h1>
         <p className="text-sm text-slate-500 mt-1">
-          Loc theo khoang ngay, gio vao, trang thai; sau do sort va xuat Excel theo dung bo du lieu dang xem.
+          Lọc theo khoảng ngày, giờ vào, trạng thái; sau đó sắp xếp và xuất Excel theo đúng bộ dữ liệu đang xem.
         </p>
         {isInternalMode && (
           <p className="text-sm text-amber-700 mt-1">
-            Dang o che do noi bo. Khi day du lieu, he thong se yeu cau dang nhap system.
+            Đang ở chế độ nội bộ. Khi đẩy dữ liệu, hệ thống sẽ yêu cầu đăng nhập system.
           </p>
         )}
       </div>
@@ -321,7 +311,7 @@ export default function Report() {
       <div className="bg-white rounded-2xl shadow-sm border border-slate-200/60 p-4 sm:p-5 space-y-4">
         <div className="grid md:grid-cols-2 xl:grid-cols-4 gap-3">
           <div>
-            <label className="block text-xs font-medium text-slate-500 mb-1.5 uppercase tracking-wide">Tu ngay</label>
+            <label className="block text-xs font-medium text-slate-500 mb-1.5 uppercase tracking-wide">Từ ngày</label>
             <input
               type="date"
               value={filters.startDate}
@@ -331,7 +321,7 @@ export default function Report() {
           </div>
 
           <div>
-            <label className="block text-xs font-medium text-slate-500 mb-1.5 uppercase tracking-wide">Den ngay</label>
+            <label className="block text-xs font-medium text-slate-500 mb-1.5 uppercase tracking-wide">Đến ngày</label>
             <input
               type="date"
               value={filters.endDate}
@@ -341,7 +331,7 @@ export default function Report() {
           </div>
 
           <div>
-            <label className="block text-xs font-medium text-slate-500 mb-1.5 uppercase tracking-wide">Gio vao tu</label>
+            <label className="block text-xs font-medium text-slate-500 mb-1.5 uppercase tracking-wide">Giờ vào từ</label>
             <input
               type="time"
               value={filters.startTime}
@@ -351,7 +341,7 @@ export default function Report() {
           </div>
 
           <div>
-            <label className="block text-xs font-medium text-slate-500 mb-1.5 uppercase tracking-wide">Gio vao den</label>
+            <label className="block text-xs font-medium text-slate-500 mb-1.5 uppercase tracking-wide">Giờ vào đến</label>
             <input
               type="time"
               value={filters.endTime}
@@ -361,21 +351,21 @@ export default function Report() {
           </div>
 
           <div>
-            <label className="block text-xs font-medium text-slate-500 mb-1.5 uppercase tracking-wide">Trang thai</label>
+            <label className="block text-xs font-medium text-slate-500 mb-1.5 uppercase tracking-wide">Trạng thái</label>
             <select
               value={filters.status}
               onChange={event => setFilters(prev => ({ ...prev, status: event.target.value }))}
               className="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-sm bg-white focus:ring-2 focus:ring-primary-500/20 focus:border-primary-400"
             >
-              <option value="all">Tat ca</option>
-              <option value="present">Dung gio</option>
-              <option value="late">Tre</option>
-              <option value="checked_out">Da checkout</option>
+              <option value="all">Tất cả</option>
+              <option value="present">Đúng giờ</option>
+              <option value="late">Trễ</option>
+              <option value="checked_out">Đã checkout</option>
             </select>
           </div>
 
           <div>
-            <label className="block text-xs font-medium text-slate-500 mb-1.5 uppercase tracking-wide">Tim nhan vien</label>
+            <label className="block text-xs font-medium text-slate-500 mb-1.5 uppercase tracking-wide">Tìm nhân viên</label>
             <input
               type="text"
               value={filters.keyword}
@@ -386,37 +376,37 @@ export default function Report() {
                   handleApplyFilters()
                 }
               }}
-              placeholder="Ma NV, ten, phong ban..."
+              placeholder="Mã NV, tên, phòng ban..."
               className="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-sm bg-white focus:ring-2 focus:ring-primary-500/20 focus:border-primary-400"
             />
           </div>
 
           <div>
-            <label className="block text-xs font-medium text-slate-500 mb-1.5 uppercase tracking-wide">Sort theo</label>
+            <label className="block text-xs font-medium text-slate-500 mb-1.5 uppercase tracking-wide">Sắp xếp theo</label>
             <select
               value={filters.sortBy}
               onChange={event => setFilters(prev => ({ ...prev, sortBy: event.target.value }))}
               className="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-sm bg-white focus:ring-2 focus:ring-primary-500/20 focus:border-primary-400"
             >
-              <option value="check_in_time">Gio vao</option>
-              <option value="check_out_time">Gio ra</option>
-              <option value="date">Ngay</option>
-              <option value="name">Ho ten</option>
-              <option value="employee_id">Ma NV</option>
-              <option value="department">Phong ban</option>
-              <option value="status">Trang thai</option>
+              <option value="check_in_time">Giờ vào</option>
+              <option value="check_out_time">Giờ ra</option>
+              <option value="date">Ngày</option>
+              <option value="name">Họ tên</option>
+              <option value="employee_id">Mã NV</option>
+              <option value="department">Phòng ban</option>
+              <option value="status">Trạng thái</option>
             </select>
           </div>
 
           <div>
-            <label className="block text-xs font-medium text-slate-500 mb-1.5 uppercase tracking-wide">Thu tu</label>
+            <label className="block text-xs font-medium text-slate-500 mb-1.5 uppercase tracking-wide">Thứ tự</label>
             <select
               value={filters.sortDir}
               onChange={event => setFilters(prev => ({ ...prev, sortDir: event.target.value }))}
               className="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-sm bg-white focus:ring-2 focus:ring-primary-500/20 focus:border-primary-400"
             >
-              <option value="desc">Giam dan</option>
-              <option value="asc">Tang dan</option>
+              <option value="desc">Giảm dần</option>
+              <option value="asc">Tăng dần</option>
             </select>
           </div>
         </div>
@@ -428,7 +418,7 @@ export default function Report() {
             className="w-full sm:w-auto flex items-center justify-center gap-2 px-4 py-2.5 bg-primary-600 text-white rounded-xl text-sm font-semibold hover:bg-primary-700 disabled:opacity-50 transition-colors"
           >
             <Search size={16} />
-            {loading ? 'Dang tai...' : 'Xem bao cao'}
+            {loading ? 'Đang tải...' : 'Xem báo cáo'}
           </button>
 
           <button
@@ -437,7 +427,7 @@ export default function Report() {
             className="w-full sm:w-auto flex items-center justify-center gap-2 px-4 py-2.5 bg-slate-100 text-slate-700 rounded-xl text-sm font-semibold hover:bg-slate-200 disabled:opacity-50 transition-colors"
           >
             <RefreshCw size={16} />
-            Dat lai bo loc
+            Đặt lại bộ lọc
           </button>
 
           <button
@@ -446,7 +436,7 @@ export default function Report() {
             className="w-full sm:w-auto flex items-center justify-center gap-2 px-4 py-2.5 bg-emerald-600 text-white rounded-xl text-sm font-semibold hover:bg-emerald-700 disabled:opacity-50 transition-colors"
           >
             <Download size={16} />
-            {exporting ? 'Dang xuat...' : 'Xuat Excel'}
+            {exporting ? 'Đang xuất...' : 'Xuất Excel'}
           </button>
 
           <button
@@ -455,29 +445,29 @@ export default function Report() {
             className="w-full sm:w-auto flex items-center justify-center gap-2 px-4 py-2.5 bg-sky-600 text-white rounded-xl text-sm font-semibold hover:bg-sky-700 disabled:opacity-50 transition-colors"
           >
             <UploadCloud size={16} />
-            {pushing ? 'Dang day...' : 'Day du lieu offline -> online'}
+            {pushing ? 'Đang đẩy...' : 'Đẩy dữ liệu offline -> online'}
           </button>
         </div>
 
         <div className="grid sm:grid-cols-3 gap-3">
           <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
-            <p className="text-xs uppercase tracking-wide text-slate-500">Tong ban ghi</p>
+            <p className="text-xs uppercase tracking-wide text-slate-500">Tổng bản ghi</p>
             <p className="mt-1 text-2xl font-bold text-slate-800">{summary.total_records || 0}</p>
           </div>
           <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
-            <p className="text-xs uppercase tracking-wide text-slate-500">Nhan vien</p>
+            <p className="text-xs uppercase tracking-wide text-slate-500">Nhân viên</p>
             <p className="mt-1 text-2xl font-bold text-slate-800">{summary.unique_employees || 0}</p>
           </div>
           <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
-            <p className="text-xs uppercase tracking-wide text-slate-500">Bo loc hien tai</p>
-            <p className="mt-1 text-sm text-slate-700 leading-6">{filterDescription || 'Chua co mo ta bo loc'}</p>
+            <p className="text-xs uppercase tracking-wide text-slate-500">Bộ lọc hiện tại</p>
+            <p className="mt-1 text-sm text-slate-700 leading-6">{filterDescription || 'Chưa có mô tả bộ lọc'}</p>
           </div>
         </div>
       </div>
 
       <div className="bg-white rounded-2xl shadow-sm border border-slate-200/60 overflow-hidden">
         {loading ? (
-          <div className="px-5 py-12 text-center text-slate-400">Dang tai...</div>
+          <div className="px-5 py-12 text-center text-slate-400">Đang tải...</div>
         ) : (
           <div>
             <div className="hidden xl:block overflow-x-auto">
@@ -485,15 +475,15 @@ export default function Report() {
                 <thead className="bg-slate-50">
                   <tr>
                     <th className="px-4 py-3 text-left font-medium text-slate-600">#</th>
-                    <th className="px-4 py-3 text-left font-medium text-slate-600">Ngay</th>
-                    <th className="px-4 py-3 text-left font-medium text-slate-600">Ho ten</th>
-                    <th className="px-4 py-3 text-left font-medium text-slate-600">Ma NV</th>
-                    <th className="px-4 py-3 text-left font-medium text-slate-600">Phong ban</th>
-                    <th className="px-4 py-3 text-left font-medium text-slate-600">Gio vao</th>
-                    <th className="px-4 py-3 text-left font-medium text-slate-600">Gio ra</th>
-                    <th className="px-4 py-3 text-left font-medium text-slate-600">Vi tri checkin</th>
-                    <th className="px-4 py-3 text-left font-medium text-slate-600">Vi tri checkout</th>
-                    <th className="px-4 py-3 text-left font-medium text-slate-600">Trang thai</th>
+                    <th className="px-4 py-3 text-left font-medium text-slate-600">Ngày</th>
+                    <th className="px-4 py-3 text-left font-medium text-slate-600">Họ tên</th>
+                    <th className="px-4 py-3 text-left font-medium text-slate-600">Mã NV</th>
+                    <th className="px-4 py-3 text-left font-medium text-slate-600">Phòng ban</th>
+                    <th className="px-4 py-3 text-left font-medium text-slate-600">Giờ vào</th>
+                    <th className="px-4 py-3 text-left font-medium text-slate-600">Giờ ra</th>
+                    <th className="px-4 py-3 text-left font-medium text-slate-600">Vị trí checkin</th>
+                    <th className="px-4 py-3 text-left font-medium text-slate-600">Vị trí checkout</th>
+                    <th className="px-4 py-3 text-left font-medium text-slate-600">Trạng thái</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-50">
@@ -541,8 +531,8 @@ export default function Report() {
                   </div>
 
                   <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-slate-600">
-                    <p>Gio vao: {record.check_in_time || '-'}</p>
-                    <p>Gio ra: {record.check_out_time || '-'}</p>
+                    <p>Giờ vào: {record.check_in_time || '-'}</p>
+                    <p>Giờ ra: {record.check_out_time || '-'}</p>
                     <p className="col-span-2">Checkin: {describeLocationText(record.check_in_location)}</p>
                     <p className="col-span-2">Checkout: {describeLocationText(record.check_out_location)}</p>
                   </div>
@@ -553,7 +543,7 @@ export default function Report() {
             {records.length > 0 && (
               <div className="px-4 sm:px-5 py-4 border-t border-slate-200 flex items-center justify-between flex-wrap gap-4">
                 <div className="flex items-center gap-2">
-                  <span className="text-sm text-slate-500">Hien thi</span>
+                  <span className="text-sm text-slate-500">Hiển thị</span>
                   <select
                     value={pageSize}
                     onChange={event => {
@@ -568,7 +558,7 @@ export default function Report() {
                     <option value={50}>50</option>
                     <option value={100}>100</option>
                   </select>
-                  <span className="text-sm text-slate-500">tren tong {records.length}</span>
+                  <span className="text-sm text-slate-500">trên tổng {records.length}</span>
                 </div>
 
                 {totalPages > 1 && (
@@ -578,7 +568,7 @@ export default function Report() {
                       disabled={page === 1}
                       className="px-3 py-1 rounded-lg border border-slate-200 text-sm font-medium hover:bg-slate-50 disabled:opacity-50 text-slate-600"
                     >
-                      Truoc
+                      Trước
                     </button>
 
                     {Array.from({ length: totalPages }, (_, i) => i + 1)
@@ -615,7 +605,7 @@ export default function Report() {
 
             {records.length === 0 && (
               <div className="px-5 py-12 text-center text-slate-400">
-                Khong co du lieu diem danh theo bo loc hien tai
+                Không có dữ liệu điểm danh theo bộ lọc hiện tại
               </div>
             )}
           </div>

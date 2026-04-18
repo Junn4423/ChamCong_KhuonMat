@@ -1,6 +1,7 @@
 from datetime import date as date_cls
 from datetime import datetime
 from io import BytesIO
+import re
 
 from backend.models.database import db, Attendance, User
 
@@ -23,11 +24,19 @@ VALID_REPORT_STATUS_FILTERS = {
 }
 
 STATUS_LABELS = {
-    'all': 'tat ca',
-    'present': 'dung gio',
-    'late': 'tre',
-    'checked_out': 'da checkout',
+    'all': 'tất cả',
+    'present': 'đúng giờ',
+    'late': 'trễ',
+    'checked_out': 'đã checkout',
 }
+
+REPORT_SIGNATURE_ROLES = (
+    'Người lập biểu',
+    'Trưởng bộ phận',
+    'Phòng nhân sự',
+    'Kế toán tiền lương',
+    'Ban giám đốc',
+)
 
 
 def _parse_date(value, fallback):
@@ -57,12 +66,30 @@ def _safe_text(value):
     return str(value or '').strip()
 
 
+def _clean_location_text(value):
+    raw = _safe_text(value)
+    if not raw:
+        return ''
+
+    # Legacy payloads can look like: "Address | lat, lng | ±94m".
+    # We only keep the first readable location label.
+    head = _safe_text(raw.split('|', 1)[0])
+    if head:
+        return head
+
+    match = re.match(r'^(.*?)\s*\(([-\d.]+),\s*([-\d.]+)(?:\s*[Â±+-](\d+)m)?\)$', raw, re.IGNORECASE)
+    if match:
+        return _safe_text(match.group(1))
+
+    return raw
+
+
 def _attendance_status(attendance):
     if attendance.check_out_time:
-        return 'checked_out', 'Da Checkout'
+        return 'checked_out', 'Đã Checkout'
     if attendance.status == 'late':
-        return 'late', 'Tre'
-    return 'present', 'Dung gio'
+        return 'late', 'Trễ'
+    return 'present', 'Đúng giờ'
 
 
 def parse_report_filters(source):
@@ -176,8 +203,8 @@ def _build_row(attendance, user):
         'department': user.department,
         'check_in_time': attendance.check_in_time.strftime('%H:%M:%S') if attendance.check_in_time else '',
         'check_out_time': attendance.check_out_time.strftime('%H:%M:%S') if attendance.check_out_time else '',
-        'check_in_location': (checkin_location_payload or {}).get('text', ''),
-        'check_out_location': (checkout_location_payload or {}).get('text', ''),
+        'check_in_location': _clean_location_text((checkin_location_payload or {}).get('text', '')),
+        'check_out_location': _clean_location_text((checkout_location_payload or {}).get('text', '')),
         'status': status_text,
         'status_key': status_key,
         '_attendance': attendance,
@@ -237,24 +264,24 @@ def serialize_report_rows(rows):
 def build_report_filter_text(filters, summary=None):
     normalized = parse_report_filters(filters)
     parts = [
-        f"Ngay: {normalized['start_date'].strftime('%d/%m/%Y')} -> {normalized['end_date'].strftime('%d/%m/%Y')}",
+        f"Ngày: {normalized['start_date'].strftime('%d/%m/%Y')} -> {normalized['end_date'].strftime('%d/%m/%Y')}",
     ]
 
     if normalized.get('start_time') or normalized.get('end_time'):
         from_time = normalized['start_time'].strftime('%H:%M') if normalized.get('start_time') else '--:--'
         to_time = normalized['end_time'].strftime('%H:%M') if normalized.get('end_time') else '--:--'
-        parts.append(f"Gio vao: {from_time} -> {to_time}")
+        parts.append(f"Giờ vào: {from_time} -> {to_time}")
 
     if normalized.get('status') and normalized['status'] != 'all':
-        parts.append(f"Trang thai: {STATUS_LABELS.get(normalized['status'], normalized['status'])}")
+        parts.append(f"Trạng thái: {STATUS_LABELS.get(normalized['status'], normalized['status'])}")
 
     if normalized.get('keyword'):
-        parts.append(f"Tu khoa: {normalized['keyword']}")
+        parts.append(f"Từ khóa: {normalized['keyword']}")
 
-    parts.append(f"Sort: {normalized['sort_by']} {normalized['sort_dir']}")
+    parts.append(f"Sắp xếp: {normalized['sort_by']} {normalized['sort_dir']}")
 
     if isinstance(summary, dict):
-        parts.append(f"So ban ghi: {int(summary.get('total_records') or 0)}")
+        parts.append(f"Số bản ghi: {int(summary.get('total_records') or 0)}")
 
     return ' | '.join(parts)
 
@@ -264,11 +291,11 @@ def build_report_workbook(rows, filters, summary):
         from openpyxl import Workbook
         from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
     except ImportError as exc:
-        raise RuntimeError('Thieu thu vien openpyxl de xuat Excel') from exc
+        raise RuntimeError('Thiếu thư viện openpyxl để xuất Excel') from exc
 
     workbook = Workbook()
     sheet = workbook.active
-    sheet.title = 'Bao cao cham cong'
+    sheet.title = 'Báo cáo chấm công'
     sheet.sheet_view.showGridLines = False
 
     header_fill = PatternFill('solid', fgColor='1F4E78')
@@ -285,7 +312,7 @@ def build_report_workbook(rows, filters, summary):
     )
 
     sheet.merge_cells('A1:J1')
-    sheet['A1'] = 'BAO CAO CHAM CONG'
+    sheet['A1'] = 'BÁO CÁO CHẤM CÔNG'
     sheet['A1'].font = Font(size=15, bold=True, color='0F172A')
     sheet['A1'].alignment = Alignment(horizontal='center', vertical='center')
     sheet['A1'].fill = title_fill
@@ -296,21 +323,21 @@ def build_report_workbook(rows, filters, summary):
     sheet['A2'].alignment = Alignment(wrap_text=True, vertical='center')
 
     sheet.merge_cells('A3:J3')
-    sheet['A3'] = f"Tao luc: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}"
+    sheet['A3'] = f"Tạo lúc: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}"
     sheet['A3'].font = Font(size=10, color='475569')
     sheet['A3'].alignment = Alignment(vertical='center')
 
     headers = [
         'STT',
-        'Ngay',
-        'Ho ten',
-        'Ma NV',
-        'Phong ban',
-        'Gio vao',
-        'Gio ra',
-        'Vi tri checkin',
-        'Vi tri checkout',
-        'Trang thai',
+        'Ngày',
+        'Họ tên',
+        'Mã NV',
+        'Phòng ban',
+        'Giờ vào',
+        'Giờ ra',
+        'Vị trí checkin',
+        'Vị trí checkout',
+        'Trạng thái',
     ]
 
     header_row = 5
@@ -381,6 +408,59 @@ def build_report_workbook(rows, filters, summary):
 
     for row_index in range(1, sheet.max_row + 1):
         sheet.row_dimensions[row_index].height = max(sheet.row_dimensions[row_index].height or 20, 20)
+
+    signature_base_row = sheet.max_row + 3
+    now = datetime.now()
+    date_line = f"Ngày {now.strftime('%d')} tháng {now.strftime('%m')} năm {now.strftime('%Y')}"
+
+    sheet.merge_cells(start_row=signature_base_row, start_column=7, end_row=signature_base_row, end_column=10)
+    date_cell = sheet.cell(row=signature_base_row, column=7, value=date_line)
+    date_cell.font = Font(size=10, italic=True, color='334155')
+    date_cell.alignment = Alignment(horizontal='center', vertical='center')
+
+    signature_title_row = signature_base_row + 1
+    signature_note_row = signature_base_row + 2
+    signature_name_row = signature_base_row + 7
+
+    for index, role in enumerate(REPORT_SIGNATURE_ROLES):
+        start_column = (index * 2) + 1
+        end_column = start_column + 1
+
+        sheet.merge_cells(
+            start_row=signature_title_row,
+            start_column=start_column,
+            end_row=signature_title_row,
+            end_column=end_column,
+        )
+        role_cell = sheet.cell(row=signature_title_row, column=start_column, value=role)
+        role_cell.font = Font(size=10, bold=True, color='0F172A')
+        role_cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
+
+        sheet.merge_cells(
+            start_row=signature_note_row,
+            start_column=start_column,
+            end_row=signature_note_row,
+            end_column=end_column,
+        )
+        note_cell = sheet.cell(row=signature_note_row, column=start_column, value='(Ký, ghi rõ họ tên)')
+        note_cell.font = Font(size=9, italic=True, color='64748B')
+        note_cell.alignment = Alignment(horizontal='center', vertical='center')
+
+        sheet.merge_cells(
+            start_row=signature_name_row,
+            start_column=start_column,
+            end_row=signature_name_row,
+            end_column=end_column,
+        )
+        sign_line_cell = sheet.cell(row=signature_name_row, column=start_column, value='')
+        sign_line_cell.alignment = Alignment(horizontal='center', vertical='center')
+
+    sheet.row_dimensions[signature_base_row].height = 22
+    sheet.row_dimensions[signature_title_row].height = 22
+    sheet.row_dimensions[signature_note_row].height = 18
+    for row_index in range(signature_note_row + 1, signature_name_row):
+        sheet.row_dimensions[row_index].height = 20
+    sheet.row_dimensions[signature_name_row].height = 22
 
     output = BytesIO()
     workbook.save(output)

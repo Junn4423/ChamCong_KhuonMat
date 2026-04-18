@@ -303,22 +303,22 @@ function getCameraErrorMessage(error, requiresSecureContext) {
 
 function getLocationErrorMessage(error, requiresSecureContext) {
   if (requiresSecureContext || error?.name === 'SecurityError') {
-    return 'Trinh duyet tren iPhone/iPad can HTTPS de lay GPS chinh xac. Hay mo bang HTTPS hoac webview da cap quyen.'
+    return 'Trình duyệt trên iPhone/iPad cần HTTPS để lấy GPS chính xác. Hãy mở bằng HTTPS hoặc webview đã cấp quyền.'
   }
 
   if (error?.code === 1 || error?.name === 'PermissionDeniedError') {
-    return 'Trinh duyet dang chan quyen vi tri. Hay bat GPS va cap quyen Location cho trinh duyet/webview roi thu lai.'
+    return 'Trình duyệt đang chặn quyền vị trí. Hãy bật GPS và cấp quyền Location cho trình duyệt/webview rồi thử lại.'
   }
 
   if (error?.code === 2 || error?.name === 'PositionUnavailableError') {
-    return 'Chua xac dinh duoc vi tri GPS. Hay bat Location Services, mo ngoai troi neu can, va thu lai.'
+    return 'Chưa xác định được vị trí GPS. Hãy bật Location Services, mở ngoài trời nếu cần, và thử lại.'
   }
 
   if (error?.code === 3 || error?.name === 'TimeoutError') {
-    return 'Lay GPS qua lau. He thong se dung diem co sai so tot nhat neu da nhan duoc, hoac ban hay thu lai.'
+    return 'Lấy GPS quá lâu. Hệ thống sẽ dùng điểm có sai số tốt nhất nếu đã nhận được, hoặc bạn hãy thử lại.'
   }
 
-  return error?.message || 'Khong lay duoc vi tri hien tai'
+  return error?.message || 'Không lấy được vị trí hiện tại'
 }
 
 function getLocationTimestampMs(location) {
@@ -340,7 +340,7 @@ function collectBestPositionPromise(options = {}) {
 
   return new Promise((resolve, reject) => {
     if (!navigator.geolocation) {
-      reject(new Error('Trinh duyet khong ho tro geolocation'))
+      reject(new Error('Trình duyệt không hỗ trợ geolocation'))
       return
     }
 
@@ -394,7 +394,7 @@ function collectBestPositionPromise(options = {}) {
         resolveWithPosition(bestPosition)
         return
       }
-      const timeoutError = new Error('Lay GPS qua thoi gian cho phep')
+      const timeoutError = new Error('Lấy GPS quá thời gian cho phép')
       timeoutError.code = 3
       rejectWithError(timeoutError)
     }, timeoutMs)
@@ -1547,7 +1547,7 @@ export default function Attendance() {
             )}
 
             <Link
-              to="/cameras"
+              to="/quan-ly-camera"
               className="w-full sm:w-auto px-4 py-2.5 bg-slate-100 text-slate-700 rounded-xl text-sm font-semibold hover:bg-slate-200 transition-colors text-center"
             >
               Quản lý camera
