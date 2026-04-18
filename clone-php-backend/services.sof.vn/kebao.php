@@ -1,33 +1,41 @@
 <?php
-// ini_set('display_errors', 1); 
-// ini_set('display_startup_errors', 1);
-// error_reporting(E_ALL);
+
+
+if (!defined('DB_SERVER_SECOND')) {
+    define("DB_SERVER_SECOND", "192.168.1.19");
+    define("DB_USER_SECOND", "tienerp");
+    define("DB_PWD_SECOND", "tien.erp");
+    define("DB_DATABASE_SECOND", "web_sof.com.vn");
+}
+
+if (!function_exists('db_connect_second')) {
+    function db_connect_second() {
+        global $db_link_second;
+        if ($db_link_second) return $db_link_second;
+        $db_link_second = mysqli_connect(DB_SERVER_SECOND, DB_USER_SECOND, DB_PWD_SECOND);
+        if ($db_link_second) mysqli_select_db($db_link_second, DB_DATABASE_SECOND);
+        mysqli_query($db_link_second, 'SET NAMES utf8');
+        return $db_link_second;
+    }
+}
+
+if (!function_exists('db_query_second')) {
+    function db_query_second($db_query) {
+        return mysqli_query(db_connect_second(), $db_query);
+    }
+}
+
+if (!function_exists('db_fetch_array_second')) {
+    function db_fetch_array_second($db_query) {
+        if ($db_query == NULL) return NULL;
+        return mysqli_fetch_array($db_query);
+    }
+}
 
 switch ($vtable) {
-
-    // case "cr_lv0150":
-    //     include_once("./class/cr_lv0150.php");
-    //     $cr_lv0150 = new cr_lv0150($_SESSION['ERPSOFV2RRight'], $_SESSION['ERPSOFV2RUserID'], 'Cr0150');
-    //     switch ($vfun) {
-    //         case "data":
-    //             $cr_lv0150->lv001 = $input['maCv'] ?? $_POST['maCv'] ?? null;
-    //             $cr_lv0150->lang = "VN";
-    //             $objEmp = $cr_lv0150->Mb_LayThongTinCV($cr_lv0150->lv001);
-    //             var_dump($objEmp);
-    //             $vOutput = [];
-    //             while ($vrow = db_fetch_array($objEmp)) {
-    //                 $vOutput[] = [
-    //                     "maChiTietTam" => $vrow['lv001'],
-    //                     "maNhanVien" => $vrow['lv002'],
-    //                     "tien" => $vrow['lv003'],
-    //                     "tiGiaQuyDoi" => $vrow['lv004'],
-    //                     "maTaiKhoanNo" => $vrow['lv005'],
-    //                     "moTa" => $vrow['lv007']
-    //                 ];
-    //             }
-    //             break;
-    //     }
-    //     break;
+    case "ping":
+        $vOutput = ["status" => "ok", "message" => "pong"];
+        break;
     case "ac_lv0002":
         include("./class/ac_lv0002.php");
         $ac_lv0002 = new ac_lv0002($_SESSION['ERPSOFV2RRight'], $_SESSION['ERPSOFV2RUserID'], 'Ac0002');
@@ -415,48 +423,147 @@ switch ($vtable) {
         }
 
         break;
+    case "wb_lv0004":
+        include_once("./class/wb_lv0004.php");
+        $wb_lv0004 = new wb_lv0004($role, $userId, 'Wb0004');
+        switch ($vfun) {
+            case "data":
+                $objEmp = $wb_lv0004->Mb_LoadAll();
+                $vOutput = [];
+                while ($vrow = db_fetch_array($objEmp)) {
+                    $vOutput[] = [
+                        "maChiTietTam" => $vrow['lv001'],
+                        "maNhanVien" => $vrow['lv002'],
+                        "tien" => $vrow['lv003'],
+                        "tiGiaQuyDoi" => $vrow['lv004'],
+                        "maTaiKhoanNo" => $vrow['lv005'],
+                        "moTa" => $vrow['lv007']
+                    ];
+                }
+                break;
+        }
+        break;
+    case 'wb_lv0005':
+        switch ($vfun) {
+            case "getTopCategories":
+                $sql = "SELECT lv001, lv002, lv003, lv004 FROM wb_lv0005 WHERE IFNULL(lv003, '') = ''";
+                $result = db_query($sql);
+                
+                $vOutput = [];
+                while ($vrow = db_fetch_array($result)) {
+                    $vOutput[] = [
+                        "maLoai" => $vrow['lv001'],
+                        "tenLoai" => $vrow['lv002'],
+                        "maCha" => $vrow['lv003'],
+                        "hinhAnh" => $vrow['lv004']
+                    ];
+                }
+                break;
+            case "getSubCategories":
+                $maCha = $input['maCha'] ?? $_POST['maCha'] ?? '';
+                $sql = "SELECT lv001, lv002, lv003, lv004 FROM wb_lv0005 WHERE lv003 = '$maCha'";
+                $result = db_query_second($sql);
+                $vOutput = [];
+                while ($vrow = db_fetch_array_second($result)) {
+                    $vOutput[] = [
+                        "maLoai" => $vrow['lv001'],
+                        "tenLoai" => $vrow['lv002'],
+                        "maCha" => $vrow['lv003'],
+                        "hinhAnh" => $vrow['lv004']
+                    ];
+                }
+                break;
+            case "data":
+                $sql = "SELECT lv001 as maLoai, lv002 as tenLoai, lv003 as maCha, lv004 as hinhAnh, lv005, lv006 FROM wb_lv0005";
+                $result = db_query_second($sql);
+                $vOutput = [];
+                while ($vrow = db_fetch_array_second($result)) {
+                    $vOutput[] = [
+                        "maLoai" => trim($vrow['maLoai']),
+                        "tenLoai" => $vrow['tenLoai'],
+                        "maCha" => trim($vrow['maCha']),
+                        "hinhAnh" => $vrow['hinhAnh'],
+                        "lv005" => $vrow['lv005'],
+                        "lv006" => $vrow['lv006']
+                    ];
+                }
+                break;
+        }
+        break;
 
-        //     case "add":
-        //         $pm_nc0005->lv001 = $input['maChoDo'] ?? $_POST['lv001'] ?? null;
-        //         $pm_nc0005->lv002 = $input['maKhuVuc'] ?? $_POST['lv002'] ?? null;
-        //         $pm_nc0005->lv003 = $input['trangThai'] ?? $_POST['lv003'] ?? 'TRONG';
-        //         $result = $pm_nc0005->KB_Insert();
-        //         $vOutput = $result ? ['success'=>true,'message'=>'Thêm mới thành công'] : ['success'=>false,'message'=>'Lỗi khi thêm mới'];
-        //         break;
-        //     case "delete":
-        //         $delArr = $input['maChoDo'] ?? $_POST['lv001'] ?? null;
-        //         if ($delArr) {
-        //             $arr = is_array($delArr) ? array_map(function($item){return "'".addslashes($item)."'";}, $delArr) : ["'".addslashes($delArr)."'"];
-        //             $success = true;
-        //             foreach ($arr as $spotId) {
-        //                 $spotId = trim($spotId, "'");
-        //                 $result = $pm_nc0005->KB_Delete($spotId);
-        //                 if (!$result) $success = false;
-        //             }
-        //             $vOutput = $success ? ['success'=>true,'message'=>'Xóa thành công'] : ['success'=>false,'message'=>'Lỗi khi xóa (có thể đang có xe gửi tại chỗ đỗ này)'];
-        //         } else {
-        //             $vOutput = ['success'=>false,'message'=>'Không có mã lv001 để xóa'];
-        //         }
-        //         break;
-        //     case "edit":
-        //         $pm_nc0005->lv001 = $input['maChoDo'] ?? $_POST['lv001'] ?? null;
-        //         $pm_nc0005->lv002 = $input['maKhuVuc'] ?? $_POST['lv002'] ?? null;
-        //         $pm_nc0005->lv003 = $input['trangThai'] ?? $_POST['lv003'] ?? null;
-        //         $result = $pm_nc0005->KB_Update();
-        //         $vOutput = $result ? ['success'=>true,'message'=>'Cập nhật thành công'] : ['success'=>false,'message'=>'Lỗi khi cập nhật'];
-        //         break;
+    case "wb_lv0006":
+        switch ($vfun) {
+            case "getProducts":
+                $maLoai = $input['maLoai'] ?? $_POST['maLoai'] ?? '';
+                $sql = "SELECT * FROM wb_lv0006 WHERE lv004 = '$maLoai'";
+                $result = db_query_second($sql);
+                $vOutput = [];
+                while ($vrow = db_fetch_array_second($result)) {
+                    $vOutput[] = [
+                        "maSanPham" => trim($vrow['lv001']),
+                        "maHang" => trim($vrow['lv002']),
+                        "loaiSanPham" => trim($vrow['lv003']), 
+                        "maLoai" => trim($vrow['lv004']),
+                        "tenSanPham" => $vrow['lv005'],
+                        "donViTinhChinh" => $vrow['lv006'],
+                        "giaBan" => $vrow['lv007'],
+                        "tonKho" => $vrow['lv008'],
+                        "moTaNgan" => $vrow['lv018'],
+                        "nhaCungCap" => $vrow['lv017'],
+                        "hinhAnh" => $vrow['lv010'],
+                        "hinhAnhLon" => $vrow['lv011']
+                    ];
+                }
+                break;
+            case "data":
+                $sql = "SELECT * FROM wb_lv0006";
+                $result = db_query_second($sql);
+                $vOutput = [];
+                while ($vrow = db_fetch_array_second($result)) {
+                    $vOutput[] = [
+                        "maSanPham" => trim($vrow['lv001']),
+                        "maHang" => trim($vrow['lv002']),
+                        "loaiSanPham" => trim($vrow['lv003']),
+                        "maLoai" => trim($vrow['lv004']),
+                        "tenSanPham" => $vrow['lv005'],
+                        "donViTinhChinh" => $vrow['lv006'],
+                        "giaBan" => $vrow['lv007'],
+                        "tonKho" => $vrow['lv008'],
+                        "moTaNgan" => $vrow['lv018'],
+                        "nhaCungCap" => $vrow['lv017'],
+                        "hinhAnh" => $vrow['lv010'],
+                        "hinhAnhLon" => $vrow['lv011']
+                    ];
+                }
+                break;
+        }
+        break;
 
-        // 	case "chinhSuaTrangThai":
-        // 		$pm_nc0005->lv001 = $input['maChoDo'] ?? $_POST['lv001'] ?? null;
-        // 		$pm_nc0005->lv003 = $input['trangThai'] ?? $_POST['lv003'] ?? null;
-        // 		$result = $pm_nc0005->KB_ChinhSuaTrangThai($pm_nc0005->lv001,$pm_nc0005->lv003);
-        // 		$vOutput = $result ? ['success'=>true,'message'=>'Cập nhật thành công'] : ['success'=>false,'message'=>'Lỗi khi cập nhật'];
-        // 		break;
-        // 		//chung thêm sync_data
-        // 	case "sync_data":
-        // 		$result = $pm_nc0005->sync_data();
-        // 		$vOutput = $result;
-        // 		break;
-        // }
-        // break;    
+    case "wb_lv0007":
+        switch ($vfun) {
+            case "getDetails":
+                $maSanPham = $input['maSanPham'] ?? $_POST['maSanPham'] ?? '';
+                $sql = "SELECT * FROM wb_lv0007 WHERE lv002 = '$maSanPham'";
+                $result = db_query_second($sql);
+                $vOutput = [];
+                while ($vrow = db_fetch_array_second($result)) {
+                    $vOutput[] = [
+                        "id" => $vrow['lv001'],
+                        "maSanPham" => $vrow['lv002'],
+                        "tieuDe" => $vrow['lv003'],
+                        "noiDungShort" => $vrow['lv004'],
+                        "noiDungLong" => $vrow['lv005'],
+                        "ngayTao" => $vrow['lv006'],
+                        "ngonNgu" => $vrow['lv007'],
+                        "lv008" => $vrow['lv008'],
+                        "lv009" => $vrow['lv009'],
+                        "lv010" => $vrow['lv010'],
+                        "lv011" => $vrow['lv011'],
+                        "lv012" => $vrow['lv012']
+                    ];
+                }
+                break;
+        }
+        break;
 }
+

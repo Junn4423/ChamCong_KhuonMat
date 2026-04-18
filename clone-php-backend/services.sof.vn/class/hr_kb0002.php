@@ -211,7 +211,7 @@ class   hr_kb0002 extends lv_controler
 	{
 		// if ($this->isAdd == 0) return false;
 		$vField = 'lv008';
-		$lvsql = "insert into erp_sof_documents_v4_0.hr_kb0002 (lv002,lv003,lv004,lv005,lv006,lv007,$vField) values('" . sof_escape_string($this->lv002) . "','" . sof_escape_string($this->lv003) . "','" . sof_escape_string($this->lv004) . "','" . sof_escape_string($this->lv005) . "','" . sof_escape_string($this->lv006) . "','" . sof_escape_string($this->lv007) . "','" . sof_escape_string($vHinh) . "')";
+		$lvsql = "insert into hao_erp_sof_documents_v5_0.hr_kb0002 (lv002,lv003,lv004,lv005,lv006,lv007,$vField) values('" . sof_escape_string($this->lv002) . "','" . sof_escape_string($this->lv003) . "','" . sof_escape_string($this->lv004) . "','" . sof_escape_string($this->lv005) . "','" . sof_escape_string($this->lv006) . "','" . sof_escape_string($this->lv007) . "','" . sof_escape_string($vHinh) . "')";
 		$vReturn = db_query($lvsql);
 		if ($vReturn) {
 			$this->lv001 = sof_insert_id();
@@ -223,7 +223,7 @@ class   hr_kb0002 extends lv_controler
 	{
 		// if ($this->isEdit == 0) return false;
 		$vField = 'lv008';
-		$lvsql = "Update erp_sof_documents_v4_0.hr_kb0002 set $vField='" . sof_escape_string($vHinh) . "' where lv001='$vKetQua'";
+		$lvsql = "Update hao_erp_sof_documents_v5_0.hr_kb0002 set $vField='" . sof_escape_string($vHinh) . "' where lv001='$vKetQua'";
 		$vReturn = db_query($lvsql);
 		if ($vReturn) $this->InsertLogOperation($this->DateCurrent, 'hr_kb0002.update', sof_escape_string($lvsql));
 		return $vReturn;
@@ -298,7 +298,7 @@ class   hr_kb0002 extends lv_controler
 	{
 		$strReturn = "";
 		$strTotal = 0;
-		$lvsql = "select lv001 from  erp_sof_documents_v4_0.hr_kb0002 Where lv002='$vlv007' ";
+		$lvsql = "select lv001 from  hao_erp_sof_documents_v5_0.hr_kb0002 Where lv002='$vlv007' ";
 		$vresult = db_query($lvsql);
 		$vrow = db_fetch_array($vresult);
 		if ($vrow) {

@@ -12,6 +12,16 @@ const navItems = [
   { to: '/report', label: 'Báo cáo', icon: BarChart },
 ]
 
+const routedSystemNames = {
+  hr: 'Hệ thống Nhân Sự',
+  er: 'Hệ thống ERP',
+  lg: 'Hệ thống Vận Tải',
+  cf: 'Chuỗi hệ thống Cafe, Nhà Hàng Quán Ăn',
+  ht: 'Hệ thống Khách Sạn',
+  pk: 'Hệ thống Bãi Xe',
+  sl: 'Hệ thống Bán Hàng',
+}
+
 export default function Layout() {
   const [apiStatus, setApiStatus] = useState('checking')
   const [sidebarOpen, setSidebarOpen] = useState(() => {
@@ -70,6 +80,10 @@ export default function Layout() {
             name: res.user?.name || 'Admin',
             code: res.user?.code || 'admin',
             department: res.user?.department || 'Quản trị viên',
+            route_prefix: res.user?.route_prefix || '',
+            system_name: res.user?.system_name || '',
+            system_note: res.user?.system_note || '',
+            welcome_message: res.user?.welcome_message || '',
           },
         })
       } else {
@@ -123,6 +137,14 @@ export default function Layout() {
     error: 'bg-red-400',
     checking: 'bg-amber-400 animate-pulse',
   }
+  const routedPrefix = (authState.user?.route_prefix || '').trim().toLowerCase()
+  const resolvedSystemName = authState.user?.system_name
+    || authState.user?.system_note
+    || routedSystemNames[routedPrefix]
+    || ''
+  const welcomeMessage = resolvedSystemName
+    ? `Xin chào, đây là hệ thống chấm công ${resolvedSystemName}`
+    : (authState.user?.welcome_message || '')
 
   return (
     <div className="relative min-h-dvh bg-slate-50 overflow-x-hidden">
@@ -214,7 +236,11 @@ export default function Layout() {
                 />
               </svg>
             </button>
-            <div className="flex-1" />
+            <div className="flex-1 min-w-0">
+              {welcomeMessage && (
+                <p className="text-xs sm:text-sm font-medium text-primary-700 truncate">{welcomeMessage}</p>
+              )}
+            </div>
             <div className="flex items-center gap-2 text-sm">
               <span className="text-slate-500 hidden sm:inline">{authState.user?.name || authState.user?.code}</span>
             </div>

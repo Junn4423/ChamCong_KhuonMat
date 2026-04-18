@@ -2,7 +2,8 @@
 // error_reporting(E_ERROR);
 // ini_set('display_errors', 1);
 // ini_set('display_startup_errors', 1);
-// error_reporting(E_ALL);
+error_reporting(E_ERROR);
+ini_set('display_errors', '0');
 
 // Cho phép từ mọi origin (hoặc cụ thể origin nếu muốn)
 header("Access-Control-Allow-Origin: *");
@@ -11,7 +12,8 @@ header("Access-Control-Allow-Origin: *");
 header("Access-Control-Allow-Methods: POST, GET, OPTIONS");
 
 // Cho phép các header custom (như Content-Type)
-header("Access-Control-Allow-Headers: Content-Type, Authorization, SOF-User-Token, X-SOF-USER-TOKEN, X-USER-TOKEN, X-USER-CODE, X-USER-USERNAME, X-DATABASE, X-SERVER-IP");
+header("Access-Control-Allow-Headers: Content-Type, Authorization, SOF-User-Token, X-SOF-USER-TOKEN, X-USER-TOKEN, X-USER-CODE, X-USER-USERNAME, X-DATABASE, X-SERVER-IP, X-SERVER-PORT, X-SERVER-USER, X-SERVER-PASSWORD");
+
 
 // Nếu là request OPTIONS (preflight), trả về sớm
 if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
@@ -20,20 +22,58 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
 }
 session_start();
 
+$role = isset($_SERVER['HTTP_ROLE']) ? $_SERVER['HTTP_ROLE'] : '';
+$username = isset($_SERVER['HTTP_USERNAME']) ? $_SERVER['HTTP_USERNAME'] : '';
+// // ===== BẢO MẬT API =====
+// // Kiểm tra SOF User Token
+// $userToken = $_SERVER['HTTP_SOF_USER_TOKEN'] ?? $input['token'] ?? $_POST['token'] ?? '';
+// $validToken = 'SOF2025DEVELOPER';
+
+// // Kiểm tra token
+// if ($userToken !== $validToken) {
+//     http_response_code(401);
+//     echo json_encode([
+//         'error' => 'Unauthorized',
+//         'message' => 'Invalid or missing SOF-User-Token'
+//     ]);
+//     exit;
+// }
+// // ===== END BẢO MẬT =====
+
 
 header("Content-Type: application/json; charset=UTF-8");
 include("config.php");
 include("function.php");
 include("lv_controler.php");
-include("kebao.php");
-include("haolamvatttu.php");
+
 
 $inputJSON = file_get_contents('php://input');
 $input = json_decode($inputJSON, true);
-$vtable = $input['table'] ?? $_POST['table'] ?? "";
-$vfun   = $input['func']  ?? $_POST['func']  ?? "";
+// Đảm bảo $input luôn là mảng để tránh cảnh báo undefined index
+if (!is_array($input)) {
+	$input = [];
+}
 
+// ===== QUAN TRỌNG: XỬ LÝ AUTH TRƯỚC =====
+// Check nếu là request authentication (login/register)
+if (isset($input['method']) || isset($_POST['method'])) {
+	include("register_user.php");
+	exit();
+}
 
+$vtable = $input['table'] ?? ($_POST['table'] ?? null);
+$vfun = $input['func'] ?? ($_POST['func'] ?? null);
+
+// Nếu thiếu table/func thì trả về lỗi rõ ràng và kết thúc sớm
+if (empty($vtable) || empty($vfun)) {
+	http_response_code(400);
+	echo json_encode([
+		'success' => false,
+		'message' => 'Thiếu tham số table hoặc func',
+		'errorType' => 'bad_request'
+	]);
+	exit();
+}
 $vlimit = isset($input['limit']) ? $input['limit'] : (isset($_POST['limit']) ? $_POST['limit'] : "");
 $vmonth = isset($input['month']) ? $input['month'] : (isset($_POST['month']) ? $_POST['month'] : "");
 $vyear = isset($input['year']) ? $input['year'] : (isset($_POST['year']) ? $_POST['year'] : "");
@@ -47,7 +87,7 @@ function saveImageToDB($fileData, $cot, $lv001)
 		// Kết nối đến CSDL
 		$db = db_connect();
 		// Kiểm tra xem lv002 = $lv001 đã tồn tại chưa
-		$checkSql = "SELECT COUNT(*) as count FROM erp_sof_documents_v4_0.cr_lv0382 WHERE lv002 = ?";
+		$checkSql = "SELECT COUNT(*) as count FROM hao_erp_sof_documents_v5_0.cr_lv0382 WHERE lv002 = ?";
 
 		$checkStmt = mysqli_prepare($db, $checkSql);
 		mysqli_stmt_bind_param($checkStmt, "s", $lv001);
@@ -59,9 +99,9 @@ function saveImageToDB($fileData, $cot, $lv001)
 
 
 		if ($exists) {
-			$sql = "UPDATE erp_sof_documents_v4_0.cr_lv0382 SET $cot = ? WHERE lv002 = ?";
+			$sql = "UPDATE hao_erp_sof_documents_v5_0.cr_lv0382 SET $cot = ? WHERE lv002 = ?";
 		} else {
-			$sql = "INSERT INTO erp_sof_documents_v4_0.cr_lv0382 (lv002, $cot) VALUES (?, ?)";
+			$sql = "INSERT INTO hao_erp_sof_documents_v5_0.cr_lv0382 (lv002, $cot) VALUES (?, ?)";
 		}
 
 		$stmt = mysqli_prepare($db, $sql);
@@ -104,76 +144,7 @@ function saveImageToDB($fileData, $cot, $lv001)
 }
 
 
-
 switch ($vtable) {
-
-	case "da_lh0012":
-		// API cho bảng FAQ (da_lh0012 = câu hỏi, da_lh0013 = câu trả lời)
-		switch ($vfun) {
-			case "data":
-				// Lấy tất cả FAQ với câu trả lời từ bảng da_lh0013
-				$vArrRe = [];
-				$vsql = "SELECT 
-					q.lv001 as id, 
-					q.lv002 as question, 
-					q.lv003 as tags, 
-					q.lv004 as date,
-					a.lv001 as answer_id,
-					a.lv003 as answer
-				FROM da_lh0012 q
-				LEFT JOIN da_lh0013 a ON a.lv002 = q.lv001
-				ORDER BY q.lv001";
-				$vresult = db_query($vsql);
-				while ($vrow = mysqli_fetch_assoc($vresult)) {
-					$vArrRe[] = $vrow;
-				}
-				$vOutput = $vArrRe;
-				break;
-			case "insertQuestion":
-				// Thêm câu hỏi mới
-				$cauHoi = $input['cauHoi'] ?? $_POST['cauHoi'] ?? "";
-				$tags = $input['tags'] ?? $_POST['tags'] ?? "General";
-				db_connect();
-				$cauHoi = sof_escape_string($cauHoi);
-				$tags = sof_escape_string($tags);
-				$vsql = "INSERT INTO da_lh0012 (lv002, lv003, lv004) VALUES ('$cauHoi', '$tags', CURDATE())";
-				$vresult = db_query($vsql);
-				if ($vresult) {
-					$vOutput = [
-						'success' => true,
-						'id' => sof_insert_id(),
-						'message' => 'Thêm câu hỏi thành công'
-					];
-				} else {
-					$vOutput = ['success' => false, 'message' => 'Lỗi: ' . sof_error()];
-				}
-				break;
-			case "updateQuestion":
-				// Cập nhật câu hỏi
-				$ma = $input['ma'] ?? $_POST['ma'] ?? "";
-				$cauHoi = $input['cauHoi'] ?? $_POST['cauHoi'] ?? "";
-				$tags = $input['tags'] ?? $_POST['tags'] ?? "";
-				db_connect();
-				$ma = sof_escape_string($ma);
-				$cauHoi = sof_escape_string($cauHoi);
-				$tags = sof_escape_string($tags);
-				$vsql = "UPDATE da_lh0012 SET lv002='$cauHoi', lv003='$tags' WHERE lv001='$ma'";
-				$vresult = db_query($vsql);
-				$vOutput = $vresult ? ['success' => true, 'message' => 'Cập nhật thành công'] : ['success' => false, 'message' => 'Lỗi: ' . sof_error()];
-				break;
-			case "deleteQuestion":
-				// Xóa câu hỏi
-				$ma = $input['ma'] ?? $_POST['ma'] ?? "";
-				db_connect();
-				$ma = sof_escape_string($ma);
-				$vsql = "DELETE FROM da_lh0012 WHERE lv001='$ma'";
-				$vresult = db_query($vsql);
-				$vOutput = $vresult ? ['success' => true, 'message' => 'Xóa thành công'] : ['success' => false, 'message' => 'Lỗi: ' . sof_error()];
-				break;
-			default:
-				$vOutput = ['success' => false, 'message' => 'Hành động da_lh0012 không hợp lệ'];
-		}
-		break;
 
 	case "cr_lv0330":
 		include("cr_lv0330.php");
@@ -249,6 +220,7 @@ switch ($vtable) {
 				break;
 		}
 		break;
+
 	case "sl_lv0013":
 		include("sl_lv0013.php");
 		switch ($vfun) {
@@ -264,9 +236,23 @@ switch ($vtable) {
 				$rawLv104 = $input['email'] ?? $_POST['email'] ?? "";
 				$rawLv009 = $input['sdt'] ?? $_POST['sdt'] ?? "";
 				$rawLv030 = $input['nguoiDaiDien'] ?? $_POST['nguoiDaiDien'] ?? "";
+				$rawGhiChu = $input['ghiChu'] ?? $_POST['ghiChu'] ?? "";
+				$token = $input['token'] ?? $_POST['token'] ?? "";
 
 				// Kết nối database
 				db_connect();
+
+				// Tìm mã nhân viên trực tiếp từ bảng bài viết mk_dd0013 (Facebook posts)
+				$employeeId = "";
+				if (!empty($token)) {
+					$tokenEsc = sof_escape_string($token);
+					$sql_staff = "SELECT lv004 FROM mk_dd0013 WHERE lv015 = '$tokenEsc' LIMIT 1";
+					$res_staff = db_query($sql_staff);
+					if ($res_staff && $row_s = db_fetch_array($res_staff)) {
+						$employeeId = $row_s['lv004'];
+					}
+				}
+				$empIdEsc = sof_escape_string($employeeId);
 
 				// $	 = (int)($input['update'] ?? $_POST['update'] ?? 0);
 				$lv002 = sof_escape_string($rawLv002);
@@ -278,8 +264,9 @@ switch ($vtable) {
 				$lv030 = sof_escape_string($rawLv030);
 				$lv104 = sof_escape_string($rawLv104);
 				$lvItemID = sof_escape_string($rawItemID);
+				$ghiChu = sof_escape_string($rawGhiChu);
 
-				$vsql = "INSERT INTO sl_lv0013 (lv002, lv003, lv011, lv027, lv021, lv005,lv104,lv105, lv009, lv030) VALUES ('{$lv002}', '{$lv003}', 0, 0, '{$lv021}', '{$lv005}', '{$lv104}', now(), '{$lv009}', '{$lv030}')";
+				$vsql = "INSERT INTO sl_lv0013 (lv002, lv003, lv011, lv027, lv021, lv005, lv104, lv105, lv009, lv030, lv013, lv101) VALUES ('{$lv002}', '{$lv003}', 0, 0, '{$lv021}', '{$lv005}', '{$lv104}', now(), '{$lv009}', '{$lv030}', '{$ghiChu}', '$empIdEsc')";
 				$vresult = db_query($vsql);
 				if ($vresult) {
 					$vContractID = sof_insert_id();
@@ -294,15 +281,37 @@ switch ($vtable) {
 								$vDetailID = $detailRow['lv001'];
 							}
 						}
+						// Loại bỏ lv150, chỉ giữ lại các cột chuẩn của ERP
 						$detailSql = "INSERT INTO cr_lv0276(lv002,lv003,lv004,lv005,lv006,lv007,lv008,lv011,lv018,lv019) SELECT '{$vContractID}','{$lvItemID}', 1, A.lv004, 0, A.lv008, 0, 0, A.lv009, A.lv002 FROM sl_lv0007 A WHERE lv001='{$lvItemID}'";
 						$detailResult = db_query($detailSql);
 						$detailMessage = $detailResult ? 'Chi tiết đã được cập nhật.' : ('Chi tiết không thể cập nhật: ' . sof_error());
 					}
+
+					// Cập nhật thống kê số đơn hàng vào bảng mk_dd0013.lv016 (Facebook posts tracking)
+					$orderCountResult = false;
+					$orderCountError = "";
+					if (!empty($token)) {
+						$tokenEsc = sof_escape_string($token);
+						$sql_count = "UPDATE mk_dd0013 SET lv016 = COALESCE(lv016, 0) + 1 WHERE lv015 = '$tokenEsc'";
+						$orderCountResult = db_query($sql_count);
+						if (!$orderCountResult) {
+							$orderCountError = sof_error();
+						} else {
+							$affected = mysqli_affected_rows($GLOBALS['db_link']);
+							$orderCountError = "Rows affected: $affected";
+						}
+					}
+
 					$vOutput = [
 						'success' => true,
 						'message' => 'Thêm đơn hàng thành công.',
 						'lv001' => $vContractID,
-						'detail' => $detailMessage
+						'detail' => $detailMessage,
+						'debug' => [
+							'tokenReceived' => $token,
+							'employeeFound' => $employeeId,
+							'orderCountUpdate' => $orderCountResult ? "Success ($orderCountError)" : "Failed: $orderCountError"
+						]
 					];
 				} else {
 					$vOutput = [
@@ -315,6 +324,7 @@ switch ($vtable) {
 				$vOutput = ['success' => false, 'message' => 'Hành động sl_lv0013 không hợp lệ.'];
 		}
 		break;
+
 	case "cr_lv0334":
 		switch ($vfun) {
 			case "data":
@@ -343,7 +353,7 @@ switch ($vtable) {
 		}
 		break;
 
-	case "hr_lv0020":
+		case "hr_lv0020":
 		include("./class/hr_lv0020.php");
 		$hr_lv0020 = new hr_lv0020($_SESSION['ERPSOFV2RRight'], $_SESSION['ERPSOFV2RUserID'], 'Tc0002');
 		switch ($vfun) {
@@ -485,7 +495,7 @@ switch ($vtable) {
 					$lv001 = mysqli_real_escape_string($db, $lv001);
 
 					// Tạo câu truy vấn SQL
-					$sql = "SELECT $cot FROM erp_sof_documents_v4_0.cr_lv0382 WHERE lv002 = '$lv001'";
+					$sql = "SELECT $cot FROM hao_erp_sof_documents_v5_0.cr_lv0382 WHERE lv002 = '$lv001'";
 					// Thực thi câu lệnh SQL
 					$vresult = db_query($sql);
 
@@ -512,7 +522,6 @@ switch ($vtable) {
 				break;
 		}
 	case "kanban_board":
-
 		include("haolam.php"); // Include file controller mới
 		$kanbanController = new KanbanBoardController();
 
@@ -808,6 +817,7 @@ switch ($vtable) {
 				break;
 		}
 		break;
+
 	case "ml_lv0100":
 		include("./class/ml_lv0100.php");
 		include("./class/ml_lv0009.php");
@@ -834,7 +844,7 @@ switch ($vtable) {
 
 				// Gọi hàm gửi mail
 				try {
-					$mailService = new ml_lv0100($_SESSION['ERPSOFV2RRight'] ?? '', $_SESSION['ERPSOFV2RUserID'] ?? '', 'Ml0100');
+					$mailService = new ml_lv0100();
 					$lv_lv0066 = new lv_lv0066($_SESSION['ERPSOFV2RRight'] ?? '', $_SESSION['ERPSOFV2RUserID'] ?? '', 'Lv0066', true);
 					$result = $lv_lv0066->LV_SendMail($lvcontent, $lvtitle, $lvuser, $lvemail, $vTo);
 					$vOutput = $result;
@@ -846,16 +856,12 @@ switch ($vtable) {
 				}
 				break;
 			case "createAccountFromOrder":
-				// Prepare the single input array
-				$accountData = [
-					'orderId'  => $input['orderId'] ?? $_POST['orderId'] ?? "",
-					'email'    => $input['email'] ?? $_POST['email'] ?? "",
-					'phone'    => $input['phone'] ?? $_POST['phone'] ?? "",
-					'link'     => $input['link'] ?? $_POST['link'] ?? "",
-					'title'    => $input['title'] ?? $_POST['title'] ?? "Thông tin tài khoản phần mềm ERP SOF.VN"
-				];
-
-				if (empty($accountData['orderId'])) {
+				$vPurchaseOrderID = $input['orderId'] ?? $_POST['orderId'] ?? "";
+				$vEmail = $input['email'] ?? $_POST['email'] ?? "";
+				$vPhone = $input['phone'] ?? $_POST['phone'] ?? "";
+				$vlink = $input['link'] ?? $_POST['link'] ?? "";
+				$vTitle = $input['title'] ?? $_POST['title'] ?? "Thông tin tài khoản phần mềm ERP SOF.VN";
+				if (empty($vPurchaseOrderID)) {
 					$vOutput = [
 						'success' => false,
 						'message' => 'Thiếu tham số orderId'
@@ -864,22 +870,31 @@ switch ($vtable) {
 				}
 
 				try {
+					// Bắt đầu capture output (vì hàm AutoCreate echo text)
 					ob_start();
 					
+					// Khởi tạo class với skipAuth = true
 					$lv_lv0066 = new lv_lv0066($_SESSION['ERPSOFV2RRight'] ?? '', $_SESSION['ERPSOFV2RUserID'] ?? 'System', 'Lv0066', true);
 					
-					// Pass the single array argument
-					$lv_lv0066->LV_AutoCreateAccountFromPurchase($accountData);
+					// Gọi hàm xử lý
+					$lv_lv0066->LV_AutoCreateAccountFromPurchase([
+						'orderId' => $vPurchaseOrderID,
+						'email' => $vEmail,
+						'phone' => $vPhone,
+						'link' => $vlink,
+						'title' => $vTitle,
+					]);
 					
+					// Lấy nội dung echo
 					$outputLog = ob_get_clean();
 					
 					$vOutput = [
 						'success' => true,
 						'message' => 'Đã xử lý yêu cầu.',
-						'log' => $outputLog 
+						'log' => $outputLog
 					];
 				} catch (Exception $e) {
-					ob_end_clean();
+					ob_end_clean(); // Clean buffer if error
 					$vOutput = [
 						'success' => false,
 						'message' => 'Lỗi: ' . $e->getMessage()
@@ -895,57 +910,6 @@ switch ($vtable) {
 		}
 		break;
 
-	case "sl_lv0515":
-		include("./class/lv_lv0066.php");
-		switch ($vfun) {
-			case "getDownloadLinks":
-				// 1. Nhận tham số productId (Mã sản phẩm)
-				$vProductId = $input['productId'] ?? $_POST['productId'] ?? "";
-				if (empty($vProductId)) {
-					$vOutput = [
-						'success' => false,
-						'message' => 'Thiếu tham số productId (Mã sản phẩm)'
-					];
-					break;
-				}
-
-				try {
-					// 2. Khởi tạo class sl_lv0515
-					// Đảm bảo file clsall/sl_lv0515.php đã được require trước đó
-					$lv_lv0066 = new lv_lv0066($_SESSION['ERPSOFV2RRight'] ?? '', $_SESSION['ERPSOFV2RUserID'] ?? 'System', 'Lv0066', true);
-					// 3. Gọi hàm lấy danh sách link
-					$links = $lv_lv0066->LV_GetLinksByProduct($vProductId);
-					
-					if (!empty($links)) {
-						$vOutput = [
-							'success' => true,
-							'message' => 'Lấy dữ liệu thành công',
-							'data'    => $links
-						];
-					} else {
-						$vOutput = [
-							'success' => false,
-							'message' => 'Không tìm thấy link download nào cho sản phẩm này.',
-							'data'    => []
-						];
-					}
-
-				} catch (Exception $e) {
-					$vOutput = [
-						'success' => false,
-						'message' => 'Lỗi hệ thống: ' . $e->getMessage()
-					];
-				}
-				break;
-
-			default:
-				$vOutput = [
-					'success' => false,
-					'message' => 'Hành động sl_lv0513 không hợp lệ. Hỗ trợ: insert'
-				];
-				break;
-		}
-		break;
 	case "sl_lv0512":
 		switch ($vfun) {
 			case "insert":
@@ -997,7 +961,6 @@ switch ($vtable) {
 				break;
 		}
 		break;
-
 	case "sl_lv0513":
 		switch ($vfun) {
 			case "insert":
@@ -1008,7 +971,7 @@ switch ($vtable) {
 				$lv005 = trim($input['soDienThoai'] ?? $_POST['soDienThoai'] ?? ''); // Số điện thoại
 				$lv006 = trim($input['dichVuQuanTam'] ?? $_POST['dichVuQuanTam'] ?? ''); // Dịch vụ quan tâm
 				$lv007 = $input['noiDungTinNhan'] ?? $_POST['noiDungTinNhan'] ?? '';       // Nội dung tin nhắn
-				$lv009 = $input['linkNguon'] ?? $_POST['linkNguon'] ?? ''; // Link nguồn gửi yêu cầu
+
 				// Validate bắt buộc
 				if ($lv002 === '' || $lv004 === '') {
 					$vOutput = [
@@ -1036,10 +999,8 @@ switch ($vtable) {
 				$lv006Esc = sof_escape_string($lv006);
 				$lv007Esc = sof_escape_string($lv007);
 
-				$lv009Esc = sof_escape_string($lv009);
-
-				$sql = "INSERT INTO sl_lv0513 (lv002, lv003, lv004, lv005, lv006, lv007, lv008, lv009) 
-				        VALUES ('{$lv002Esc}', '{$lv003Esc}', '{$lv004Esc}', '{$lv005Esc}', '{$lv006Esc}', '{$lv007Esc}', NOW(), '{$lv009Esc}')";
+				$sql = "INSERT INTO sl_lv0513 (lv002, lv003, lv004, lv005, lv006, lv007, lv008) 
+				        VALUES ('{$lv002Esc}', '{$lv003Esc}', '{$lv004Esc}', '{$lv005Esc}', '{$lv006Esc}', '{$lv007Esc}', NOW())";
 				$res = db_query($sql);
 				
 				if ($res) {
@@ -1064,8 +1025,186 @@ switch ($vtable) {
 				break;
 		}
 		break;
-}
 
+	case "wh_lv0010":
+        // Nhúng các class cần thiết để thao tác với Kho
+		$wh0010Path = __DIR__ . "/class/wh_lv0010.php";
+		$wh0011Path = __DIR__ . "/class/wh_lv0011.php";
+		if (!file_exists($wh0010Path) || !file_exists($wh0011Path)) {
+			$vOutput = [
+				'success' => false,
+				'message' => 'Thiếu file class kho (wh_lv0010.php hoặc wh_lv0011.php).',
+				'errorType' => 'missing_warehouse_class'
+			];
+			break;
+		}
+
+		include_once($wh0010Path);
+		include_once($wh0011Path);
+
+		if (!class_exists('wh_lv0010') || !class_exists('wh_lv0011')) {
+			$vOutput = [
+				'success' => false,
+				'message' => 'Không nạp được class kho wh_lv0010/wh_lv0011.',
+				'errorType' => 'invalid_warehouse_class'
+			];
+			break;
+		}
+        
+        switch ($vfun) {
+            case "create_export_hardware":
+                // 1. Nhận các tham số đầu vào từ request
+                $donhangid = $input['donhangid'] ?? $_POST['donhangid'] ?? "";
+                $vcusname = $input['vcusname'] ?? $_POST['vcusname'] ?? "";
+                $idKemThoiGian = $input['idKemThoiGian'] ?? $_POST['idKemThoiGian'] ?? "";
+                
+                // Validate tham số bắt buộc
+                if (empty($donhangid)) {
+                    $vOutput = [
+                        'success' => false,
+                        'message' => 'Thiếu tham số mã đơn hàng (donhangid).'
+                    ];
+                    break;
+                }
+
+                db_connect();
+                $vNow = date('Y-m-d H:i:s'); 
+
+                // =====================================================================
+                // 2. KIỂM TRA ĐƠN HÀNG CÓ CHỨA PHẦN CỨNG HAY KHÔNG? (>= 1 sản phẩm)
+                // =====================================================================
+                $hasHardware = false; // Đổi biến thành "Có phần cứng"
+                $totalPhanCung = 0;
+
+                $sqlCheckHW = "
+                    SELECT 
+                        COUNT(A.lv001) as total_sp, 
+                        SUM(IF(TRIM(B.lv003) = 'PHANCUNG', 1, 0)) as total_phancung 
+                    FROM sl_lv0014 A
+                    LEFT JOIN sl_lv0007 B ON A.lv003 = B.lv001
+                    WHERE A.lv002 = '" . sof_escape_string($donhangid) . "'
+                ";
+                
+                $resHW = db_query($sqlCheckHW);
+                if ($rowHW = db_fetch_array($resHW)) {
+                    $totalPhanCung = (int)$rowHW['total_phancung'];
+
+                    // Chỉ cần có >= 1 sản phẩm phần cứng là tiến hành xuất kho
+                    if ($totalPhanCung > 0) {
+                        $hasHardware = true;
+                    }
+                }
+
+                // =====================================================================
+                // 3. THỰC THI TẠO PHIẾU XUẤT VÀ CHI TIẾT (CHỈ XUẤT PHẦN CỨNG)
+                // =====================================================================
+                if ($hasHardware) {
+                    $mowh_lv0010 = new wh_lv0010($_SESSION['ERPSOFV2RRight'] ?? '', $_SESSION['ERPSOFV2RUserID'] ?? '', 'Wh0010',true);
+                    
+                    // Sinh mã phiếu xuất
+                    $maPhieuXuat = InsertWithCheckFist('wh_lv0010', 'lv001', '/PXK/MP'.substr(getyear($vNow),-2,2), 4);
+                    
+                    // Gán dữ liệu phiếu tổng
+                    $mowh_lv0010->lv001 = $maPhieuXuat; 
+                    $mowh_lv0010->lv002 = '1'; 
+                    $mowh_lv0010->lv003 = $_SESSION['ERPSOFV2RUserID'] ?? 'SYSTEM'; 
+                    $mowh_lv0010->lv004 = $vcusname; 
+                    $mowh_lv0010->lv005 = '';
+                    $mowh_lv0010->lv006 = $idKemThoiGian; 
+                    $mowh_lv0010->lv007 = '0'; 
+                    $mowh_lv0010->lv008 = 'Xuất giữ hàng phần cứng cho khách hàng ' . $vcusname; 
+                    $mowh_lv0010->lv034 = $totalPhanCung; // Chỉ đếm số lượng sp PHẦN CỨNG
+                    $mowh_lv0010->lv009 = $mowh_lv0010->FormatView($vNow, 2); 
+                    $mowh_lv0010->lv010 = 'NOIBO'; 
+                    $mowh_lv0010->lv011 = 'SOF001'; 
+                    $mowh_lv0010->lv099 = '4'; 
+                    $mowh_lv0010->lv114 = '';
+                    $mowh_lv0010->lv115 = $idKemThoiGian; 
+                    $mowh_lv0010->lv116 = '';
+
+                    // Lưu phiếu tổng
+                    $bResultI = $mowh_lv0010->LV_InsertTemp();
+                    
+                    if ($bResultI == true) {
+                        $mowh_lv0011 = new wh_lv0011($_SESSION['ERPSOFV2RRight'] ?? '', $_SESSION['ERPSOFV2RUserID'] ?? '', 'Wh0011',true);
+                        
+                        // LỌC LẠI SQL: Chỉ lấy những mặt hàng là PHANCUNG để nạp vào chi tiết phiếu xuất kho
+                        $sqlGetDetails = "
+                            SELECT A.lv003, A.lv004, A.lv005, A.lv006 
+                            FROM sl_lv0014 A
+                            LEFT JOIN sl_lv0007 B ON A.lv003 = B.lv001
+                            WHERE A.lv002 = '" . sof_escape_string($donhangid) . "' 
+                            AND TRIM(B.lv003) = 'PHANCUNG'
+                        ";
+                        $resDetails = db_query($sqlGetDetails);
+                        
+                        // Lặp và thêm chi tiết
+                        while ($rowDetail = db_fetch_array($resDetails)) {
+                            $mowh_lv0011->lv002 = $maPhieuXuat;           
+                            $mowh_lv0011->lv003 = $rowDetail['lv003'];    
+                            $mowh_lv0011->lv004 = $rowDetail['lv004'];    
+                            $mowh_lv0011->lv005 = $rowDetail['lv005'];    
+                            $mowh_lv0011->lv006 = '';
+                            
+                            $mowh_lv0011->lv007 = '';
+                            $mowh_lv0011->lv008 = $rowDetail['lv006'];    
+                            $mowh_lv0011->lv009 = '';
+                            $mowh_lv0011->lv010 = '';
+                            $mowh_lv0011->lv011 = '';
+                            $mowh_lv0011->lv012 = '';
+                            $mowh_lv0011->lv013 = '';
+                            $mowh_lv0011->lv014 = '';
+                            $mowh_lv0011->lv015 = '';
+                            $mowh_lv0011->lv016 = '';
+                            $mowh_lv0011->lv017 = '';
+                            $mowh_lv0011->lv018 = '';
+                            $mowh_lv0011->lv019 = '';
+                            $mowh_lv0011->lv020 = '';
+
+                            $mowh_lv0011->LV_Insert();
+                        }
+                        
+                        // TỰ ĐỘNG DUYỆT PHIẾU
+                        $arrIdDuyet = "'" . $maPhieuXuat . "'"; 
+                        $bApprove = $mowh_lv0010->LV_Aproval($arrIdDuyet);
+                        
+                        // Trả về API phản hồi thành công
+                        $vOutput = [
+                            'success' => true,
+                            'message' => 'Đơn hàng có phần cứng. Đã tạo và duyệt phiếu xuất kho tự động!',
+                            'maPhieuXuat' => $maPhieuXuat,
+                            'approved' => $bApprove
+                        ];
+                    } else {
+                        // Trả về API lỗi insert phiếu tổng
+                        $vOutput = [
+                            'success' => false,
+                            'message' => 'Lỗi: Không thể lưu phiếu xuất kho gốc (wh_lv0010) vào hệ thống.'
+                        ];
+                    }
+                } else {
+                    // Trả về API nếu hoàn toàn KHÔNG có phần cứng (VD: 100% là phần mềm)
+                    $vOutput = [
+                        'success' => true, 
+                        'message' => 'Đơn hàng chỉ có phần mềm. Bỏ qua bước tạo phiếu xuất kho.',
+                        'skipped' => true
+                    ];
+                }
+                break;
+                
+            default:
+                $vOutput = [
+                    'success' => false, 
+                    'message' => 'Hành động wh_lv0010 không hợp lệ. Hỗ trợ: create_export_hardware'
+                ];
+                break;
+        }
+        break;
+}
+include("kebao.php");
+include("haolamvatttu.php");
+include("ngocchung.php");
+include("ngochung_2_wb_intergrate.php");
 if ($vfun == 'data') {
 	$i = 1;
 	echo "[";

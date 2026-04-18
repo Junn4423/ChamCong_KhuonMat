@@ -1,7 +1,25 @@
 /**
  * Attendance module — check attendance, stats, today records, reports.
  */
-import { request } from '../request'
+import { request, requestBlob } from '../request'
+
+function buildReportQuery(input) {
+  const params = new URLSearchParams()
+
+  if (typeof input === 'string') {
+    if (input) params.set('date', input)
+    return params.toString()
+  }
+
+  const source = input && typeof input === 'object' ? input : {}
+  for (const [key, value] of Object.entries(source)) {
+    if (value == null) continue
+    const normalized = String(value).trim()
+    if (!normalized) continue
+    params.set(key, normalized)
+  }
+  return params.toString()
+}
 
 export const attendanceApi = {
   checkAttendance: (userId, location = null, attendanceType = 'checkin') => request('/api/check_attendance', {
@@ -35,11 +53,23 @@ export const attendanceApi = {
 
   getTodayAttendance: () => request('/api/get_today_attendance'),
 
-  getReport: (date) => request(`/api/report?date=${date}`),
+  getReport: (filters) => {
+    const query = buildReportQuery(filters)
+    return request(`/api/report${query ? `?${query}` : ''}`)
+  },
 
-  pushReportToErp: (date) => request('/api/report/push_to_erp', {
+  exportReportExcel: (filters) => {
+    const query = buildReportQuery(filters)
+    return requestBlob(`/api/report/export_xlsx${query ? `?${query}` : ''}`)
+  },
+
+  pushReportToErp: (filters) => request('/api/report/push_to_erp', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ date }),
+    body: JSON.stringify(
+      typeof filters === 'string'
+        ? { date: filters }
+        : (filters || {})
+    ),
   }),
 }

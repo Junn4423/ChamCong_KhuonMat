@@ -227,7 +227,7 @@ class   cr_lv0384 extends lv_controler
 	{
 		$strReturn = "";
 		$strTotal = 0;
-		$lvsql = "select lv001 from  erp_sof_documents_v4_0.cr_lv0384_temp Where lv007='$vlv007' ";
+		$lvsql = "select lv001 from  hao_erp_sof_documents_v5_0.cr_lv0384_temp Where lv007='$vlv007' ";
 		$vresult = db_query($lvsql);
 		$vrow = db_fetch_array($vresult);
 		if ($vrow) {
@@ -239,7 +239,7 @@ class   cr_lv0384 extends lv_controler
 	{
 		$strReturn = "";
 		$strTotal = 0;
-		$lvsql = "select lv001 from  erp_sof_documents_v4_0.cr_lv0384 Where lv002='$vlv007' ";
+		$lvsql = "select lv001 from  hao_erp_sof_documents_v5_0.cr_lv0384 Where lv002='$vlv007' ";
 		$vresult = db_query($lvsql);
 		$vrow = db_fetch_array($vresult);
 		if ($vrow) {
@@ -328,7 +328,7 @@ class   cr_lv0384 extends lv_controler
 	{
 		if ($this->isAdd == 0) return false;
 		$vField = 'lv008';
-		$lvsql = "insert into erp_sof_documents_v4_0.cr_lv0384_temp (lv002,lv003,lv004,lv005,lv006,lv007,$vField) values('" . sof_escape_string($this->lv002) . "','" . sof_escape_string($this->lv003) . "','" . sof_escape_string($this->lv004) . "','" . sof_escape_string($this->lv005) . "','" . sof_escape_string($this->lv006) . "','" . sof_escape_string($this->lv007) . "','" . sof_escape_string($vHinh) . "')";
+		$lvsql = "insert into hao_erp_sof_documents_v5_0.cr_lv0384_temp (lv002,lv003,lv004,lv005,lv006,lv007,$vField) values('" . sof_escape_string($this->lv002) . "','" . sof_escape_string($this->lv003) . "','" . sof_escape_string($this->lv004) . "','" . sof_escape_string($this->lv005) . "','" . sof_escape_string($this->lv006) . "','" . sof_escape_string($this->lv007) . "','" . sof_escape_string($vHinh) . "')";
 		$vReturn = db_query($lvsql);
 		if ($vReturn) {
 			$this->lv001 = sof_insert_id();
@@ -340,7 +340,7 @@ class   cr_lv0384 extends lv_controler
 	{
 		if ($this->isEdit == 0) return false;
 		$vField = 'lv008';
-		$lvsql = "Update erp_sof_documents_v4_0.cr_lv0384_temp set $vField='" . sof_escape_string($vHinh) . "' where lv001='$vKetQua'";
+		$lvsql = "Update hao_erp_sof_documents_v5_0.cr_lv0384_temp set $vField='" . sof_escape_string($vHinh) . "' where lv001='$vKetQua'";
 		$vReturn = db_query($lvsql);
 		if ($vReturn) $this->InsertLogOperation($this->DateCurrent, 'cr_lv0384_temp.update', sof_escape_string($lvsql));
 		return $vReturn;
@@ -349,7 +349,7 @@ class   cr_lv0384 extends lv_controler
 	{
 		// if ($this->isAdd == 0) return false;
 		$vField = 'lv008';
-		$lvsql = "insert into erp_sof_documents_v4_0.cr_lv0384 (lv002,lv003,lv004,lv005,lv006,lv007,$vField) values('" . sof_escape_string($this->lv002) . "','" . sof_escape_string($this->lv003) . "','" . sof_escape_string($this->lv004) . "','" . sof_escape_string($this->lv005) . "','" . sof_escape_string($this->lv006) . "','" . sof_escape_string($this->lv007) . "','" . sof_escape_string($vHinh) . "')";
+		$lvsql = "insert into hao_erp_sof_documents_v5_0.cr_lv0384 (lv002,lv003,lv004,lv005,lv006,lv007,$vField) values('" . sof_escape_string($this->lv002) . "','" . sof_escape_string($this->lv003) . "','" . sof_escape_string($this->lv004) . "','" . sof_escape_string($this->lv005) . "','" . sof_escape_string($this->lv006) . "','" . sof_escape_string($this->lv007) . "','" . sof_escape_string($vHinh) . "')";
 		$vReturn = db_query($lvsql);
 		if ($vReturn) {
 			$this->lv001 = sof_insert_id();
@@ -361,7 +361,7 @@ class   cr_lv0384 extends lv_controler
 	{
 		// if ($this->isEdit == 0) return false;
 		$vField = 'lv008';
-		$lvsql = "Update erp_sof_documents_v4_0.cr_lv0384 set $vField='" . sof_escape_string($vHinh) . "' where lv001='$vKetQua'";
+		$lvsql = "Update hao_erp_sof_documents_v5_0.cr_lv0384 set $vField='" . sof_escape_string($vHinh) . "' where lv001='$vKetQua'";
 		$vReturn = db_query($lvsql);
 		if ($vReturn) $this->InsertLogOperation($this->DateCurrent, 'cr_lv0384.update', sof_escape_string($lvsql));
 		return $vReturn;
@@ -377,11 +377,11 @@ class   cr_lv0384 extends lv_controler
 			$this->lastId = $vInsertID;
 			$this->InsertLogOperation($this->DateCurrent, 'cr_lv0384.insert', sof_escape_string($lvsql));
 			//Attached files
-			$lvsql = "insert into erp_sof_documents_v4_0.cr_lv0384(lv002,lv003,lv004,lv005,lv006,lv007,lv008) select '$vInsertID',lv003,lv004,lv005,lv006,lv007,lv008 from erp_sof_documents_v4_0.cr_lv0384_temp where lv007='" . $this->LV_UserID . "'";
+			$lvsql = "insert into hao_erp_sof_documents_v5_0.cr_lv0384(lv002,lv003,lv004,lv005,lv006,lv007,lv008) select '$vInsertID',lv003,lv004,lv005,lv006,lv007,lv008 from hao_erp_sof_documents_v5_0.cr_lv0384_temp where lv007='" . $this->LV_UserID . "'";
 			$vReturn = db_query($lvsql);
 			if ($vReturn) {
 				$this->InsertLogOperation($this->DateCurrent, 'cr_lv0384.insert', sof_escape_string($lvsql));
-				$lvsql1 = "delete from erp_sof_documents_v4_0.cr_lv0384_temp where lv007='" . $this->LV_UserID . "'";
+				$lvsql1 = "delete from hao_erp_sof_documents_v5_0.cr_lv0384_temp where lv007='" . $this->LV_UserID . "'";
 				$vReturn = db_query($lvsql1);
 			}
 		}
@@ -421,9 +421,9 @@ class   cr_lv0384 extends lv_controler
 				$vReturn = db_query($lvsql);
 				if ($vReturn) {
 					$this->InsertLogOperation($this->DateCurrent, 'cr_lv0384.delete', sof_escape_string($lvsql));
-					$lvsql = "DELETE FROM erp_sof_documents_v4_0.cr_lv0384  WHERE lv007='" . $vrow['lv001'] . "'"; // and (select count(*) from hr_lv0221 B where  B.lv002= hr_lv0221.lv001)<=0  ";
+					$lvsql = "DELETE FROM hao_erp_sof_documents_v5_0.cr_lv0384  WHERE lv007='" . $vrow['lv001'] . "'"; // and (select count(*) from hr_lv0221 B where  B.lv002= hr_lv0221.lv001)<=0  ";
 					$vReturn = db_query($lvsql);
-					$this->InsertLogOperation($this->DateCurrent, 'erp_sof_documents_v4_0.cr_lv0384.delete', sof_escape_string($lvsql));
+					$this->InsertLogOperation($this->DateCurrent, 'hao_erp_sof_documents_v5_0.cr_lv0384.delete', sof_escape_string($lvsql));
 				}
 			}
 			return $vReturn;
@@ -448,7 +448,7 @@ class   cr_lv0384 extends lv_controler
 	function LV_DeleteUser($vUserID)
 	{
 		if ($this->isDel == 0) return false;
-		$lvsql = "DELETE FROM erp_sof_documents_v4_0.cr_lv0384  WHERE cr_lv0384.lv002='$vUserID'"; // and (select count(*) from cr_lv0384 B where  B.lv002= cr_lv0384.lv001)<=0  ";
+		$lvsql = "DELETE FROM hao_erp_sof_documents_v5_0.cr_lv0384  WHERE cr_lv0384.lv002='$vUserID'"; // and (select count(*) from cr_lv0384 B where  B.lv002= cr_lv0384.lv001)<=0  ";
 		$vReturn = db_query($lvsql);
 		if ($vReturn) $this->InsertLogOperation($this->DateCurrent, 'cr_lv0384.delete', sof_escape_string($lvsql));
 		return $vReturn;
@@ -1098,7 +1098,7 @@ class   cr_lv0384 extends lv_controler
 	function Mb_GetFileContent($maTaiLieu)
 	{
 		$lvsql = "SELECT a.lv001 as id, a.lv004 as tenTaiLieu, a.lv006 as fileName, a.lv008 as fileContent
-				FROM erp_sof_documents_v4_0.cr_lv0384 a
+				FROM hao_erp_sof_documents_v5_0.cr_lv0384 a
 				WHERE a.lv002 = '$maTaiLieu'";  // lv002 = mã tài liệu cha
 
 		$result = db_query($lvsql);

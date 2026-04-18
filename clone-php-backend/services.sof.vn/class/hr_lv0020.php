@@ -378,10 +378,21 @@ class   hr_lv0020 extends lv_controler
 		$vArrRe = [];
 		$vsql = "SELECT * from  hr_lv0020";
 		$vresult = db_query($vsql);
+		if (!$vresult) {
+			return array(
+				'success' => false,
+				'message' => 'Loi truy van hr_lv0020: ' . sof_error(),
+				'data' => array(),
+			);
+		}
 		while ($vrow = mysqli_fetch_assoc($vresult)) {
 			$vArrRe[] = $vrow;
 		}
-		return $vArrRe;
+		return array(
+			'success' => true,
+			'data' => $vArrRe,
+			'count' => count($vArrRe),
+		);
 	}
 
 	function layNhanVienTheoMa($maNhanVien)

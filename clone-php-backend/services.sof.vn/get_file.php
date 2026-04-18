@@ -16,7 +16,7 @@ if (!$maTaiLieu || !$id) {
 $dbhost = "localhost";
 $dbuser = "root"; // sửa nếu user DB khác
 $dbpass = "";     // sửa nếu DB có mật khẩu
-$dbname = "erp_sof_documents_v4_0"; // tên database của bạn
+$dbname = "hao_erp_sof_documents_v5_0"; // tên database của bạn
 
 $mysql = mysqli_connect($dbhost, $dbuser, $dbpass, $dbname);
 if (!$mysql) {

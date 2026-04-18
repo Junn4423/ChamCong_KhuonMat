@@ -1268,8 +1268,7 @@ class KanbanBoardController
                 t_kanban.lv004 AS taskId, 
                 t_kanban.lv005 AS title, 
                 t_kanban.lv007 AS description,
-                t_kanban.lv013 AS startDate,
-                t_kanban.lv019 AS endDate,
+                
                 -- THAY ĐỔI 1: Lấy thông tin từ bảng cột da_lh0005
                 t_column.lv002 AS columnId, -- Giả sử lv002 là tên cột
                 
@@ -1402,8 +1401,6 @@ class KanbanBoardController
                 t_master.lv001 AS id, 
                 t_kanban.lv004 AS taskId, 
                 t_kanban.lv005 AS title, 
-                t_kanban.lv013 AS startDate,
-                t_kanban.lv019 AS endDate,
                 t_kanban.lv007 AS description,
                 (
                     SELECT lv003 
@@ -1472,8 +1469,6 @@ class KanbanBoardController
                 t_kanban.lv004 AS taskId, 
                 t_kanban.lv005 AS title, 
                 t_kanban.lv007 AS description,
-                t_kanban.lv013 AS startDate,
-                t_kanban.lv019 AS endDate,
                 t_mapping.lv003 AS columnId,
                 COALESCE(
                     (SELECT sa.lv004 
@@ -4601,7 +4596,7 @@ class KanbanBoardController
         $projectId = isset($data['projectId']) ? trim($data['projectId']) : '';
         // Lấy ID người dùng đang thực hiện thao tác từ session
         $userId = $_SESSION['userlogin_smcd'] ?? '';
-        $user_role = isset($data['user_role']) ? trim($data['user_role']) : '';
+
         if ($kanbanTaskId <= 0 || $newColumnId <= 0 || empty($departmentId) || empty($userId)) {
             return ['success' => false, 'message' => 'Thiếu thông tin để di chuyển (task, cột mới, phòng ban, user).'];
         }
@@ -4660,7 +4655,6 @@ class KanbanBoardController
                 'projectId' => $projectId,
                 'isCompleted' => 1, // Đánh dấu là đang muốn "Hoàn thành"
                 'userId' => $userId,
-                'user_role' => $user_role,
                 'isFromInProgress' => $is_from_in_progress // Thêm flag để biết có đang từ cột "Đang thực hiện" không
             ];
 
@@ -5130,6 +5124,7 @@ class KanbanBoardController
         $userId = isset($data['userId']) ? trim($data['userId']) : '';
         $isFromInProgress = isset($data['isFromInProgress']) ? (bool)$data['isFromInProgress'] : false; // Thêm flag mới
         $user_role = isset($data['user_role']) ? trim($data['user_role']) : 'user'; // Vai trò người dùng
+
         // NẾU KHÔNG CÓ PROJECT ID (trường hợp tổng quan phòng ban), TỰ ĐỘNG TÌM
         if (empty($projectId) || $projectId === 'null') {
             $find_project_query = "SELECT lv018 FROM da_lh0003 WHERE lv001 = ? LIMIT 1";
@@ -5236,24 +5231,16 @@ class KanbanBoardController
                 }
 
                 // --- B4: GÁN LẠI người đảm nhận cũ vào công việc ở cột DONE mới --- CHỈ NẾU KHÔNG PHẢI ADMIN
-                if ($success) {
-                    $assignee_for_done = null;
+                if ($success && $user_role !== 'admin') {
+                    // Nếu chưa có ai đảm nhận, gán người đăng nhập hiện tại
+                    $assignee_for_done = $current_assignee_id ? $current_assignee_id : $userId;
 
-                    if (!empty($current_assignee_id)) {
-                        $assignee_for_done = $current_assignee_id;
-                    } elseif ($user_role !== 'admin' && $user_role !=='manager') {
-                        $assignee_for_done = $userId;
-                    }
-
-                    // Chỉ thực hiện gán nếu xác định được người ($assignee_for_done không null)
-                    if ($assignee_for_done) {
-                        $assign_query = "REPLACE INTO da_lh0008 (lv001, lv002, lv003, lv004) VALUES (?, ?, ?, ?)";
-                        $stmt_assign = mysqli_prepare($this->db_link, $assign_query);
-                        // Dùng $masterTaskId cho lv001
-                        mysqli_stmt_bind_param($stmt_assign, "iiss", $masterTaskId, $done_column_id_for_dept, $departmentId, $assignee_for_done);
-                        if (!mysqli_stmt_execute($stmt_assign)) $success = false;
-                        mysqli_stmt_close($stmt_assign);
-                    }
+                    $assign_query = "REPLACE INTO da_lh0008 (lv001, lv002, lv003, lv004) VALUES (?, ?, ?, ?)";
+                    $stmt_assign = mysqli_prepare($this->db_link, $assign_query);
+                    // <<< THAY ĐỔI: Dùng $masterTaskId cho lv001
+                    mysqli_stmt_bind_param($stmt_assign, "iiss", $masterTaskId, $done_column_id_for_dept, $departmentId, $assignee_for_done);
+                    if (!mysqli_stmt_execute($stmt_assign)) $success = false;
+                    mysqli_stmt_close($stmt_assign);
                 }
             }
             $assignee_for_log = $current_assignee_id ? $current_assignee_id : $userId;
@@ -5798,8 +5785,7 @@ class KanbanBoardController
                 t_kanban.lv005 AS title, 
                 t_kanban.lv007 AS description,
                 t_project.lv002 AS projectName,
-                t_kanban.lv013 AS startDate,
-                t_kanban.lv019 AS endDate,
+                
                 -- Lấy ID cột (lv002) từ bảng da_lh0005
                 t_column.lv002 AS columnId, 
                 
@@ -5925,8 +5911,6 @@ class KanbanBoardController
                     t_kanban.lv004 AS taskId, 
                     t_kanban.lv005 AS title, 
                     t_kanban.lv007 AS description,
-                    t_kanban.lv013 AS startDate,
-                    t_kanban.lv019 AS endDate,
                     t_project.lv002 AS projectName,
                     (
                         SELECT lv003 
@@ -5991,8 +5975,6 @@ class KanbanBoardController
                     t_kanban.lv005 AS title, 
                     t_kanban.lv007 AS description,
                     t_mapping.lv003 AS columnId,
-                    t_kanban.lv013 AS startDate,
-                    t_kanban.lv019 AS endDate,
                     t_project.lv002 AS projectName,
                     COALESCE(
                         (SELECT sa.lv004 

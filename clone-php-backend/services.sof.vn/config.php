@@ -1,53 +1,524 @@
 <?php
 mysqli_report(MYSQLI_REPORT_OFF);
-define("DB_SERVER", "127.0.0.1");
-define("DB_USER", "root");
-define("DB_PWD", "SofSql@2025.");
-define("DB_DATABASE", "erp_sofv4_0");
+define("DB_SERVER", getenv('DB_SERVER') ? getenv('DB_SERVER') : (getenv('MYSQL_HOST') ? getenv('MYSQL_HOST') : '127.0.0.1'));
+define("DB_PORT", getenv('DB_PORT') ? (int)getenv('DB_PORT') : (getenv('MYSQL_PORT') ? (int)getenv('MYSQL_PORT') : 3306));
+define("DB_USER", getenv('DB_USER') ? getenv('DB_USER') : (getenv('MYSQL_USER') ? getenv('MYSQL_USER') : 'root'));
+define("DB_PWD", getenv('DB_PWD') ? getenv('DB_PWD') : (getenv('MYSQL_PASSWORD') ? getenv('MYSQL_PASSWORD') : 'SofSql@2025.'));
+define("DB_DATABASE", getenv('DB_DATABASE') ? getenv('DB_DATABASE') : (getenv('MYSQL_DATABASE') ? getenv('MYSQL_DATABASE') : 'erp_sofv4_0'));
 if (!defined("COUCHDB_HOST")) define("COUCHDB_HOST", getenv('COUCHDB_HOST') ? getenv('COUCHDB_HOST') : '192.168.1.20');
 if (!defined("COUCHDB_PORT")) define("COUCHDB_PORT", getenv('COUCHDB_PORT') ? getenv('COUCHDB_PORT') : '5984');
 if (!defined("COUCHDB_USER")) define("COUCHDB_USER", getenv('COUCHDB_USER') ? getenv('COUCHDB_USER') : 'admin');
 if (!defined("COUCHDB_PASS")) define("COUCHDB_PASS", getenv('COUCHDB_PASS') ? getenv('COUCHDB_PASS') : 'rootsof');
-if (!defined("COUCHDB_DATABASE")) define("COUCHDB_DATABASE", getenv('COUCHDB_DATABASE') ? getenv('COUCHDB_DATABASE') : 'couchdb20');
+if (!defined("COUCHDB_DATABASE")) define("COUCHDB_DATABASE", getenv('COUCHDB_DATABASE') ? getenv('COUCHDB_DATABASE') : 'couchdb');
+if (!defined("COUCHDB_DISPATCHER_DB")) define("COUCHDB_DISPATCHER_DB", getenv('COUCHDB_DISPATCHER_DB') ? getenv('COUCHDB_DISPATCHER_DB') : 'couchdb');
+if (!defined("COUCHDB_ROUTE_DOC_PREFIX")) define("COUCHDB_ROUTE_DOC_PREFIX", getenv('COUCHDB_ROUTE_DOC_PREFIX') ? getenv('COUCHDB_ROUTE_DOC_PREFIX') : 'dispatcher:prefix:');
+if (!defined("COUCHDB_FALLBACK_HOST")) define("COUCHDB_FALLBACK_HOST", getenv('COUCHDB_FALLBACK_HOST') ? getenv('COUCHDB_FALLBACK_HOST') : '192.168.1.81');
+if (!defined("COUCHDB_FALLBACK_PORT")) define("COUCHDB_FALLBACK_PORT", getenv('COUCHDB_FALLBACK_PORT') ? getenv('COUCHDB_FALLBACK_PORT') : '5984');
+if (!defined("COUCHDB_FALLBACK_USER")) define("COUCHDB_FALLBACK_USER", getenv('COUCHDB_FALLBACK_USER') ? getenv('COUCHDB_FALLBACK_USER') : COUCHDB_USER);
+if (!defined("COUCHDB_FALLBACK_PASS")) define("COUCHDB_FALLBACK_PASS", getenv('COUCHDB_FALLBACK_PASS') ? getenv('COUCHDB_FALLBACK_PASS') : COUCHDB_PASS);
+if (!defined("COUCHDB_FALLBACK_DISPATCHER_DB")) define("COUCHDB_FALLBACK_DISPATCHER_DB", getenv('COUCHDB_FALLBACK_DISPATCHER_DB') ? getenv('COUCHDB_FALLBACK_DISPATCHER_DB') : COUCHDB_DISPATCHER_DB);
 if (!defined("COUCHDB_USER_TABLE")) define("COUCHDB_USER_TABLE", getenv('COUCHDB_USER_TABLE') ? getenv('COUCHDB_USER_TABLE') : 'lv_lv0066');
 define("No_Date_Default", "1900-01-01");
 global $pListFolder;
 date_default_timezone_set('Asia/Krasnoyarsk');
+
+function lv_get_request_header_value($headerName)
+{
+	$headerName = strtolower((string)$headerName);
+	if (function_exists('getallheaders')) {
+		$headers = getallheaders();
+		if (is_array($headers)) {
+			foreach ($headers as $key => $value) {
+				if (strtolower((string)$key) === $headerName) {
+					return trim((string)$value);
+				}
+			}
+		}
+	}
+
+	$serverKey = 'HTTP_' . strtoupper(str_replace('-', '_', $headerName));
+	if (isset($_SERVER[$serverKey])) {
+		return trim((string)$_SERVER[$serverKey]);
+	}
+
+	return '';
+}
+
+function lv_extract_request_token()
+{
+	$token = lv_get_request_header_value('X-USER-TOKEN');
+	if ($token !== '') {
+		return $token;
+	}
+
+	$token = lv_get_request_header_value('X-SOF-USER-TOKEN');
+	if ($token !== '') {
+		return $token;
+	}
+
+	$token = lv_get_request_header_value('SOF-User-Token');
+	if ($token !== '') {
+		return $token;
+	}
+
+	$authorization = lv_get_request_header_value('Authorization');
+	if ($authorization !== '' && stripos($authorization, 'Bearer ') === 0) {
+		return trim(substr($authorization, 7));
+	}
+
+	if (isset($_POST['token']) && trim((string)$_POST['token']) !== '') {
+		return trim((string)$_POST['token']);
+	}
+	if (isset($_GET['token']) && trim((string)$_GET['token']) !== '') {
+		return trim((string)$_GET['token']);
+	}
+
+	return '';
+}
+
+function lv_normalize_db_name($value)
+{
+	$value = trim((string)$value);
+	if ($value === '') {
+		return '';
+	}
+	if (!preg_match('/^[A-Za-z0-9_]+$/', $value)) {
+		return '';
+	}
+	return $value;
+}
+
+function lv_normalize_host($value)
+{
+	$value = trim((string)$value);
+	if ($value === '') {
+		return '';
+	}
+
+	if (stripos($value, 'http://') === 0 || stripos($value, 'https://') === 0) {
+		$parsed = parse_url($value, PHP_URL_HOST);
+		if (is_string($parsed) && trim($parsed) !== '') {
+			$value = trim($parsed);
+		}
+	}
+
+	$slashPos = strpos($value, '/');
+	if ($slashPos !== false) {
+		$value = substr($value, 0, $slashPos);
+	}
+
+	if ($value === '') {
+		return '';
+	}
+
+	if (strpos($value, ':') !== false) {
+		$parts = explode(':', $value, 2);
+		$value = trim((string)$parts[0]);
+	}
+
+	if (!preg_match('/^[A-Za-z0-9\.-]+$/', $value)) {
+		return '';
+	}
+	return $value;
+}
+
+function lv_normalize_port($value, $default = 3306)
+{
+	$value = trim((string)$value);
+	if ($value === '') {
+		return (int)$default;
+	}
+	$port = (int)$value;
+	if ($port <= 0 || $port > 65535) {
+		return (int)$default;
+	}
+	return $port;
+}
+
+function lv_resolve_mysql_target()
+{
+	static $cachedTarget = null;
+	if (is_array($cachedTarget)) {
+		return $cachedTarget;
+	}
+
+	$target = array(
+		'host' => (string)DB_SERVER,
+		'port' => (int)DB_PORT,
+		'user' => (string)DB_USER,
+		'password' => (string)DB_PWD,
+		'database' => (string)DB_DATABASE,
+		'source' => 'default',
+	);
+
+	$headerDatabase = lv_normalize_db_name(lv_get_request_header_value('X-DATABASE'));
+	if ($headerDatabase !== '') {
+		$target['database'] = $headerDatabase;
+		$target['source'] = 'header';
+	}
+
+	$headerHost = lv_normalize_host(lv_get_request_header_value('X-SERVER-IP'));
+	if ($headerHost !== '') {
+		$target['host'] = $headerHost;
+		$target['source'] = 'header';
+	}
+
+	$headerPort = lv_normalize_port(lv_get_request_header_value('X-SERVER-PORT'), (int)$target['port']);
+	if ($headerPort > 0) {
+		$target['port'] = $headerPort;
+	}
+
+	$headerUser = trim((string)lv_get_request_header_value('X-SERVER-USER'));
+	if ($headerUser !== '') {
+		$target['user'] = $headerUser;
+		$target['source'] = 'header';
+	}
+
+	$headerPassword = lv_get_request_header_value('X-SERVER-PASSWORD');
+	if ($headerPassword !== '') {
+		$target['password'] = (string)$headerPassword;
+		$target['source'] = 'header';
+	}
+
+	$token = lv_extract_request_token();
+	if ($token !== '' && function_exists('findUserByToken')) {
+		$tokenInfo = findUserByToken($token);
+		if (is_array($tokenInfo) && !empty($tokenInfo['success'])) {
+			$userData = isset($tokenInfo['userData']) && is_array($tokenInfo['userData']) ? $tokenInfo['userData'] : array();
+
+			$tokenDatabase = lv_normalize_db_name(isset($userData['lv670']) ? $userData['lv670'] : '');
+			if ($tokenDatabase !== '') {
+				$target['database'] = $tokenDatabase;
+				$target['source'] = 'token';
+			}
+
+			$tokenHost = lv_normalize_host(isset($userData['lv094']) ? $userData['lv094'] : '');
+			if ($tokenHost !== '') {
+				$target['host'] = $tokenHost;
+				$target['source'] = 'token';
+			}
+
+			$tokenPort = lv_normalize_port(isset($userData['lv100']) ? $userData['lv100'] : '', (int)$target['port']);
+			if ($tokenPort > 0) {
+				$target['port'] = $tokenPort;
+			}
+
+			$tokenUser = trim((string)(isset($userData['lv095']) ? $userData['lv095'] : ''));
+			$tokenPass = (string)(isset($userData['lv099']) ? $userData['lv099'] : '');
+			if ($tokenUser !== '') {
+				$target['user'] = $tokenUser;
+				if ($tokenPass !== '') {
+					$target['password'] = $tokenPass;
+				}
+			} elseif ($tokenPass !== '') {
+				// Some tenant docs only provide password while username is inherited from default config.
+				$target['password'] = $tokenPass;
+				$target['source'] = 'token';
+			}
+		}
+	}
+
+	if ($target['database'] === '') {
+		$target['database'] = (string)DB_DATABASE;
+	}
+	if ($target['host'] === '') {
+		$target['host'] = (string)DB_SERVER;
+	}
+	if ((int)$target['port'] <= 0) {
+		$target['port'] = (int)DB_PORT;
+	}
+	if ($target['user'] === '') {
+		$target['user'] = (string)DB_USER;
+	}
+
+	$cachedTarget = $target;
+	return $target;
+}
+
+function lv_mysql_attempts()
+{
+	$resolved = lv_resolve_mysql_target();
+	$attempts = array();
+	$seen = array();
+
+	$resolvedHost = (string)$resolved['host'];
+	$resolvedPort = (int)$resolved['port'];
+	$resolvedUser = (string)$resolved['user'];
+	$resolvedPassword = (string)$resolved['password'];
+	$resolvedDatabase = (string)$resolved['database'];
+
+	$defaultHost = (string)DB_SERVER;
+	$defaultPort = (int)DB_PORT;
+	$defaultUser = (string)DB_USER;
+	$defaultPassword = (string)DB_PWD;
+	$defaultDatabase = (string)DB_DATABASE;
+
+	$addAttempt = function ($host, $port, $user, $password, $database, $source) use (&$attempts, &$seen) {
+		$key = strtolower((string)$host) . '|' . (string)((int)$port) . '|' . (string)$user . '|' . (string)$database . '|' . md5((string)$password);
+		if (isset($seen[$key])) {
+			return;
+		}
+		$seen[$key] = true;
+		$attempts[] = array(
+			'host' => (string)$host,
+			'port' => (int)$port,
+			'user' => (string)$user,
+			'password' => (string)$password,
+			'database' => (string)$database,
+			'source' => (string)$source,
+		);
+	};
+
+	$addAttempt(
+		$resolvedHost,
+		$resolvedPort,
+		$resolvedUser,
+		$resolvedPassword,
+		$resolvedDatabase,
+		$resolved['source']
+	);
+
+	$addAttempt(
+		$resolvedHost,
+		$resolvedPort,
+		$defaultUser,
+		$defaultPassword,
+		$resolvedDatabase,
+		'resolved_host_default_credential'
+	);
+
+	$addAttempt(
+		$resolvedHost,
+		$resolvedPort,
+		$resolvedUser,
+		'',
+		$resolvedDatabase,
+		'resolved_host_empty_password'
+	);
+
+	$addAttempt(
+		$resolvedHost,
+		$resolvedPort,
+		$defaultUser,
+		'',
+		$resolvedDatabase,
+		'resolved_host_default_user_empty_password'
+	);
+
+	$addAttempt(
+		$defaultHost,
+		$defaultPort,
+		$resolvedUser,
+		$resolvedPassword,
+		$resolvedDatabase,
+		'default_host_resolved_credential'
+	);
+
+	$addAttempt(
+		$defaultHost,
+		$defaultPort,
+		$defaultUser,
+		$defaultPassword,
+		$resolvedDatabase,
+		'default_host_resolved_database'
+	);
+
+	$addAttempt(
+		$defaultHost,
+		$defaultPort,
+		$resolvedUser,
+		'',
+		$resolvedDatabase,
+		'default_host_resolved_user_empty_password'
+	);
+
+	$addAttempt(
+		$defaultHost,
+		$defaultPort,
+		$defaultUser,
+		'',
+		$resolvedDatabase,
+		'default_host_default_user_empty_password'
+	);
+
+	$addAttempt(
+		'localhost',
+		$defaultPort,
+		$defaultUser,
+		$defaultPassword,
+		$resolvedDatabase,
+		'localhost_default_credential'
+	);
+
+	$addAttempt(
+		'localhost',
+		$defaultPort,
+		$defaultUser,
+		'',
+		$resolvedDatabase,
+		'localhost_empty_password'
+	);
+
+	$addAttempt(
+		$defaultHost,
+		$defaultPort,
+		$defaultUser,
+		$defaultPassword,
+		$defaultDatabase,
+		'default'
+	);
+
+	return $attempts;
+}
+
 function db_connect()
 {
-	global $db_link;
-	if ($db_link) return $db_link;
-	$db_link = mysqli_connect(DB_SERVER, DB_USER, DB_PWD);
-	if ($db_link) mysqli_select_db($db_link, DB_DATABASE);
-	mysqli_query($db_link, 'SET NAMES utf8');
+	global $db_link, $db_link_key, $db_link_meta, $db_last_connect_error, $db_last_attempts;
+	$db_last_connect_error = '';
+	$db_last_attempts = array();
+
+	$attempts = lv_mysql_attempts();
+	if (!is_array($attempts) || count($attempts) === 0) {
+		$attempts = array(
+			array(
+				'host' => (string)DB_SERVER,
+				'port' => (int)DB_PORT,
+				'user' => (string)DB_USER,
+				'password' => (string)DB_PWD,
+				'database' => (string)DB_DATABASE,
+				'source' => 'default',
+			),
+		);
+	}
+
+	$first = $attempts[0];
+	$expectedKey = strtolower($first['host']) . '|' . (int)$first['port'] . '|' . $first['user'] . '|' . $first['database'];
+	if ($db_link && $db_link_key === $expectedKey) {
+		return $db_link;
+	}
+
+	if ($db_link) {
+		mysqli_close($db_link);
+		$db_link = null;
+		$db_link_key = '';
+	}
+
+	foreach ($attempts as $attempt) {
+		$host = (string)$attempt['host'];
+		$port = (int)$attempt['port'];
+		$user = (string)$attempt['user'];
+		$password = (string)$attempt['password'];
+		$database = (string)$attempt['database'];
+		$source = (string)$attempt['source'];
+
+		if ($host === '' || $database === '') {
+			continue;
+		}
+
+		$conn = @mysqli_connect($host, $user, $password, '', $port);
+		if (!$conn) {
+			$db_last_attempts[] = array(
+				'host' => $host,
+				'port' => $port,
+				'user' => $user,
+				'database' => $database,
+				'source' => $source,
+				'error' => mysqli_connect_error(),
+			);
+			continue;
+		}
+
+		if (!@mysqli_select_db($conn, $database)) {
+			$db_last_attempts[] = array(
+				'host' => $host,
+				'port' => $port,
+				'user' => $user,
+				'database' => $database,
+				'source' => $source,
+				'error' => mysqli_error($conn),
+			);
+			mysqli_close($conn);
+			continue;
+		}
+
+		@mysqli_query($conn, 'SET NAMES utf8');
+		$db_link = $conn;
+		$db_link_key = strtolower($host) . '|' . $port . '|' . $user . '|' . $database;
+		$db_link_meta = array(
+			'host' => $host,
+			'port' => $port,
+			'user' => $user,
+			'database' => $database,
+			'source' => (string)$attempt['source'],
+		);
+		break;
+	}
+
+	if (!$db_link) {
+		$lastAttempt = null;
+		if (is_array($db_last_attempts) && count($db_last_attempts) > 0) {
+			$lastAttempt = $db_last_attempts[count($db_last_attempts) - 1];
+		}
+
+		if (is_array($lastAttempt)) {
+			$db_last_connect_error =
+				'Khong ket noi duoc MySQL. Last attempt [' .
+				$lastAttempt['host'] . ':' . (int)$lastAttempt['port'] . '/' . $lastAttempt['database'] .
+				' as ' . $lastAttempt['user'] . ', source=' . $lastAttempt['source'] .
+				'] => ' . $lastAttempt['error'];
+		} else {
+			$db_last_connect_error = 'Khong ket noi duoc MySQL';
+		}
+	}
+
 	return $db_link;
 }
 function sof_escape_string($str)
 {
-	//return $str;
 	global $db_link;
+	if (!$db_link) {
+		db_connect();
+	}
+	if (!$db_link) {
+		return addslashes((string)$str);
+	}
 	return mysqli_real_escape_string($db_link, $str);
 }
 function sof_insert_id()
 {
 	global $db_link;
+	if (!$db_link) {
+		return 0;
+	}
 	return mysqli_insert_id($db_link);
 }
 function sof_error()
 {
-	global $db_link;
+	global $db_link, $db_last_connect_error;
+	if (!$db_link) {
+		if (is_string($db_last_connect_error) && trim($db_last_connect_error) !== '') {
+			return $db_last_connect_error;
+		}
+		return 'MySQL connection not available';
+	}
 	return mysqli_error($db_link);
 }
 function db_close()
 {
-	global $db_link;
-	$result = mysqli_close($db_link);
+	global $db_link, $db_link_key, $db_link_meta;
+	$result = $db_link ? mysqli_close($db_link) : false;
+	$db_link = null;
+	$db_link_key = '';
+	$db_link_meta = null;
 	return $db_link;
 }
 function db_query($db_query)
 {
-	global $db_link;
-	$result = mysqli_query(db_connect(), $db_query);
+	$conn = db_connect();
+	if (!$conn) {
+		return false;
+	}
+	$result = mysqli_query($conn, $db_query);
 	return $result;
 }
 function db_fetch_array($db_query)

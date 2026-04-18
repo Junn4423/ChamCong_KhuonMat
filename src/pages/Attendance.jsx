@@ -12,6 +12,10 @@ const LIVE_DETECT_INTERVAL_MS = 900
 const LIVE_DETECT_MAX_WIDTH = 480
 const AUTO_ATTENDANCE_COOLDOWN_MS = 120000
 const AUTO_ATTENDANCE_STREAK_REQUIRED = 2
+const GPS_REFRESH_INTERVAL_MS = 30000
+const GEOLOCATION_SAMPLE_TIMEOUT_MS = 12000
+const GEOLOCATION_TARGET_ACCURACY_METERS = 35
+const GEOLOCATION_MIN_SAMPLE_COUNT = 2
 
 const FIXED_BROWSER_CAMERA = {
   id: FIXED_BROWSER_CAMERA_ID,
@@ -297,6 +301,129 @@ function getCameraErrorMessage(error, requiresSecureContext) {
   return error?.message || 'Không thể mở camera trình duyệt'
 }
 
+function getLocationErrorMessage(error, requiresSecureContext) {
+  if (requiresSecureContext || error?.name === 'SecurityError') {
+    return 'Trinh duyet tren iPhone/iPad can HTTPS de lay GPS chinh xac. Hay mo bang HTTPS hoac webview da cap quyen.'
+  }
+
+  if (error?.code === 1 || error?.name === 'PermissionDeniedError') {
+    return 'Trinh duyet dang chan quyen vi tri. Hay bat GPS va cap quyen Location cho trinh duyet/webview roi thu lai.'
+  }
+
+  if (error?.code === 2 || error?.name === 'PositionUnavailableError') {
+    return 'Chua xac dinh duoc vi tri GPS. Hay bat Location Services, mo ngoai troi neu can, va thu lai.'
+  }
+
+  if (error?.code === 3 || error?.name === 'TimeoutError') {
+    return 'Lay GPS qua lau. He thong se dung diem co sai so tot nhat neu da nhan duoc, hoac ban hay thu lai.'
+  }
+
+  return error?.message || 'Khong lay duoc vi tri hien tai'
+}
+
+function getLocationTimestampMs(location) {
+  const raw = location?.timestamp || location?.captured_at || ''
+  if (!raw) return 0
+  const ts = Date.parse(raw)
+  return Number.isFinite(ts) ? ts : 0
+}
+
+function getPositionAccuracy(position) {
+  const accuracy = Number(position?.coords?.accuracy)
+  return Number.isFinite(accuracy) ? accuracy : Number.POSITIVE_INFINITY
+}
+
+function collectBestPositionPromise(options = {}) {
+  const timeoutMs = Number(options.timeoutMs) || GEOLOCATION_SAMPLE_TIMEOUT_MS
+  const targetAccuracy = Number(options.targetAccuracy) || GEOLOCATION_TARGET_ACCURACY_METERS
+  const minSamples = Math.max(1, Number(options.minSamples) || GEOLOCATION_MIN_SAMPLE_COUNT)
+
+  return new Promise((resolve, reject) => {
+    if (!navigator.geolocation) {
+      reject(new Error('Trinh duyet khong ho tro geolocation'))
+      return
+    }
+
+    let bestPosition = null
+    let sampleCount = 0
+    let settled = false
+    let watchId = null
+
+    const cleanup = () => {
+      if (watchId != null && typeof navigator.geolocation.clearWatch === 'function') {
+        navigator.geolocation.clearWatch(watchId)
+      }
+      clearTimeout(timeoutHandle)
+    }
+
+    const resolveWithPosition = (position) => {
+      if (settled) return
+      settled = true
+      cleanup()
+      resolve(position)
+    }
+
+    const rejectWithError = (error) => {
+      if (settled) return
+      settled = true
+      cleanup()
+      reject(error)
+    }
+
+    const handlePosition = (position) => {
+      sampleCount += 1
+      if (!bestPosition || getPositionAccuracy(position) < getPositionAccuracy(bestPosition)) {
+        bestPosition = position
+      }
+
+      if (getPositionAccuracy(bestPosition) <= targetAccuracy && sampleCount >= minSamples) {
+        resolveWithPosition(bestPosition)
+      }
+    }
+
+    const handleError = (error) => {
+      if (bestPosition) {
+        resolveWithPosition(bestPosition)
+        return
+      }
+      rejectWithError(error)
+    }
+
+    const timeoutHandle = setTimeout(() => {
+      if (bestPosition) {
+        resolveWithPosition(bestPosition)
+        return
+      }
+      const timeoutError = new Error('Lay GPS qua thoi gian cho phep')
+      timeoutError.code = 3
+      rejectWithError(timeoutError)
+    }, timeoutMs)
+
+    if (typeof navigator.geolocation.watchPosition === 'function') {
+      watchId = navigator.geolocation.watchPosition(
+        handlePosition,
+        handleError,
+        {
+          enableHighAccuracy: true,
+          timeout: timeoutMs,
+          maximumAge: 0,
+        }
+      )
+      return
+    }
+
+    navigator.geolocation.getCurrentPosition(
+      resolveWithPosition,
+      rejectWithError,
+      {
+        enableHighAccuracy: true,
+        timeout: timeoutMs,
+        maximumAge: 0,
+      }
+    )
+  })
+}
+
 function sanitizeDeviceLabel(label, index) {
   const normalized = (label || '').trim()
   if (normalized) return normalized
@@ -519,7 +646,7 @@ export default function Attendance() {
 
     locationTimerRef.current = setInterval(() => {
       updateBrowserLocation()
-    }, 30000)
+    }, GPS_REFRESH_INTERVAL_MS)
 
     return () => {
       if (locationTimerRef.current) clearInterval(locationTimerRef.current)
@@ -1029,8 +1156,11 @@ export default function Attendance() {
         attendance_type: normalizedAttendanceType,
       }
 
-      if (locationEnabled && locationInfo) {
-        payload.location = locationInfo
+      if (locationEnabled) {
+        const nextLocation = await ensureFreshLocationForAttendance()
+        if (nextLocation) {
+          payload.location = nextLocation
+        }
       }
 
       const res = await api.attendanceImageBase64(payload)
@@ -1098,7 +1228,11 @@ export default function Attendance() {
     setLocationBusy(true)
     setLocationError('')
     try {
-      const position = await getCurrentPositionPromise()
+      const position = await collectBestPositionPromise({
+        timeoutMs: GEOLOCATION_SAMPLE_TIMEOUT_MS,
+        targetAccuracy: GEOLOCATION_TARGET_ACCURACY_METERS,
+        minSamples: GEOLOCATION_MIN_SAMPLE_COUNT,
+      })
       const payload = {
         enabled: true,
         location: {
@@ -1106,23 +1240,46 @@ export default function Attendance() {
           longitude: position.coords.longitude,
           accuracy: position.coords.accuracy,
           label: 'Thiết bị hiện tại',
-          provider: 'browser',
+          provider: 'browser_gps',
+          timestamp: new Date(position.timestamp || Date.now()).toISOString(),
         },
       }
       const res = await api.updateLocationState(payload)
       if (res.success) {
-        setLocationInfo(res.location || payload.location)
-        return true
+        const nextLocation = res.location || payload.location
+        setLocationInfo(nextLocation)
+        return nextLocation
       } else {
         setLocationError(res.message || 'Không cập nhật được location')
-        return false
+        return null
       }
     } catch (error) {
       setLocationError(error?.message || 'Không lấy được location')
-      return false
+      return null
     } finally {
       setLocationBusy(false)
     }
+  }
+
+  async function ensureFreshLocationForAttendance() {
+    if (!locationEnabled) return null
+
+    const accuracy = Number(locationInfo?.accuracy)
+    const ageMs = Date.now() - getLocationTimestampMs(locationInfo)
+    const hasLocation = locationInfo?.latitude != null && locationInfo?.longitude != null
+    const shouldRefresh = (
+      !hasLocation
+      || !Number.isFinite(accuracy)
+      || accuracy > (GEOLOCATION_TARGET_ACCURACY_METERS * 2)
+      || ageMs > (GPS_REFRESH_INTERVAL_MS * 2)
+    )
+
+    if (!shouldRefresh) {
+      return locationInfo
+    }
+
+    const nextLocation = await updateBrowserLocation()
+    return nextLocation || locationInfo || null
   }
 
   async function toggleLocation(nextEnabled) {
@@ -1143,7 +1300,7 @@ export default function Attendance() {
     }
 
     const updated = await updateBrowserLocation()
-    setLocationEnabled(updated)
+    setLocationEnabled(!!updated)
   }
 
   const showActiveCameraWarning = cameraRunning && activeCameraId && selectedCameraId && activeCameraId !== selectedCameraId

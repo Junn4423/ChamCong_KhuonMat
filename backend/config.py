@@ -47,11 +47,32 @@ ERP_HTTP_TYPE_CODE = os.getenv('ERP_HTTP_TYPE_CODE', 'CHAMCONG')
 ERP_HTTP_DEVICE_TYPE = os.getenv('ERP_HTTP_DEVICE_TYPE', 'web')
 ERP_COUCHDB_HOST = os.getenv('ERP_COUCHDB_HOST', '192.168.1.20')
 ERP_COUCHDB_PORT = int(os.getenv('ERP_COUCHDB_PORT', 5984))
-ERP_COUCHDB_DB = os.getenv('ERP_COUCHDB_DB', 'couchdb20')
+ERP_COUCHDB_DB = os.getenv('ERP_COUCHDB_DB', 'couchdb')
+ERP_COUCHDB_DISPATCHER_DB = os.getenv('ERP_COUCHDB_DISPATCHER_DB', ERP_COUCHDB_DB)
+ERP_COUCHDB_ROUTE_DOC_PREFIX = os.getenv('ERP_COUCHDB_ROUTE_DOC_PREFIX', 'dispatcher:prefix:')
+# Deprecated: routing now uses prefix before the first dot (prefix.username).
+# Keep env for backward compatibility; default to 0.
+try:
+    ERP_COUCHDB_ROUTE_PREFIX_LENGTH = int(os.getenv('ERP_COUCHDB_ROUTE_PREFIX_LENGTH', 0))
+except (TypeError, ValueError):
+    ERP_COUCHDB_ROUTE_PREFIX_LENGTH = 0
 ERP_COUCHDB_USER_TABLE = os.getenv('ERP_COUCHDB_USER_TABLE', 'lv_lv0066')
 ERP_COUCHDB_USER = os.getenv('ERP_COUCHDB_USER', '')
 ERP_COUCHDB_PASSWORD = os.getenv('ERP_COUCHDB_PASSWORD', '')
 ERP_COUCHDB_LOG_DOC_ID = os.getenv('ERP_COUCHDB_LOG_DOC_ID', 'logs')
+
+# Last-resort dispatcher fallback (when prefix cannot be resolved on primary CouchDB)
+ERP_COUCHDB_FALLBACK_HOST = os.getenv('ERP_COUCHDB_FALLBACK_HOST', '192.168.1.81').strip()
+try:
+    ERP_COUCHDB_FALLBACK_PORT = int(os.getenv('ERP_COUCHDB_FALLBACK_PORT', 5984))
+except (TypeError, ValueError):
+    ERP_COUCHDB_FALLBACK_PORT = 5984
+ERP_COUCHDB_FALLBACK_DISPATCHER_DB = os.getenv(
+    'ERP_COUCHDB_FALLBACK_DISPATCHER_DB',
+    ERP_COUCHDB_DISPATCHER_DB,
+).strip() or ERP_COUCHDB_DISPATCHER_DB
+ERP_COUCHDB_FALLBACK_USER = os.getenv('ERP_COUCHDB_FALLBACK_USER', '').strip() or ERP_COUCHDB_USER
+ERP_COUCHDB_FALLBACK_PASSWORD = os.getenv('ERP_COUCHDB_FALLBACK_PASSWORD', '').strip() or ERP_COUCHDB_PASSWORD
 
 MYSQL_USE_PURE = os.getenv('MYSQL_USE_PURE', 'true').lower() != 'false'
 MYSQL_COMMON_CONFIG = {

@@ -1,11 +1,25 @@
 <?php
+mysqli_report(MYSQLI_REPORT_OFF);
 define("DB_SERVER", "127.0.0.1");
 define("DB_USER", "root");
 define("DB_PWD", "SofSql@2025.");
 define("DB_DATABASE", "erp_sofv4_0");
+if (!defined("COUCHDB_HOST")) define("COUCHDB_HOST", getenv('COUCHDB_HOST') ? getenv('COUCHDB_HOST') : '192.168.1.20');
+if (!defined("COUCHDB_PORT")) define("COUCHDB_PORT", getenv('COUCHDB_PORT') ? getenv('COUCHDB_PORT') : '5984');
+if (!defined("COUCHDB_USER")) define("COUCHDB_USER", getenv('COUCHDB_USER') ? getenv('COUCHDB_USER') : 'admin');
+if (!defined("COUCHDB_PASS")) define("COUCHDB_PASS", getenv('COUCHDB_PASS') ? getenv('COUCHDB_PASS') : 'rootsof');
+if (!defined("COUCHDB_DATABASE")) define("COUCHDB_DATABASE", getenv('COUCHDB_DATABASE') ? getenv('COUCHDB_DATABASE') : 'couchdb');
+if (!defined("COUCHDB_DISPATCHER_DB")) define("COUCHDB_DISPATCHER_DB", getenv('COUCHDB_DISPATCHER_DB') ? getenv('COUCHDB_DISPATCHER_DB') : 'couchdb');
+if (!defined("COUCHDB_ROUTE_DOC_PREFIX")) define("COUCHDB_ROUTE_DOC_PREFIX", getenv('COUCHDB_ROUTE_DOC_PREFIX') ? getenv('COUCHDB_ROUTE_DOC_PREFIX') : 'dispatcher:prefix:');
+if (!defined("COUCHDB_FALLBACK_HOST")) define("COUCHDB_FALLBACK_HOST", getenv('COUCHDB_FALLBACK_HOST') ? getenv('COUCHDB_FALLBACK_HOST') : '192.168.1.81');
+if (!defined("COUCHDB_FALLBACK_PORT")) define("COUCHDB_FALLBACK_PORT", getenv('COUCHDB_FALLBACK_PORT') ? getenv('COUCHDB_FALLBACK_PORT') : '5984');
+if (!defined("COUCHDB_FALLBACK_USER")) define("COUCHDB_FALLBACK_USER", getenv('COUCHDB_FALLBACK_USER') ? getenv('COUCHDB_FALLBACK_USER') : COUCHDB_USER);
+if (!defined("COUCHDB_FALLBACK_PASS")) define("COUCHDB_FALLBACK_PASS", getenv('COUCHDB_FALLBACK_PASS') ? getenv('COUCHDB_FALLBACK_PASS') : COUCHDB_PASS);
+if (!defined("COUCHDB_FALLBACK_DISPATCHER_DB")) define("COUCHDB_FALLBACK_DISPATCHER_DB", getenv('COUCHDB_FALLBACK_DISPATCHER_DB') ? getenv('COUCHDB_FALLBACK_DISPATCHER_DB') : COUCHDB_DISPATCHER_DB);
+if (!defined("COUCHDB_USER_TABLE")) define("COUCHDB_USER_TABLE", getenv('COUCHDB_USER_TABLE') ? getenv('COUCHDB_USER_TABLE') : 'lv_lv0066');
 define("No_Date_Default", "1900-01-01");
 global $pListFolder;
-date_default_timezone_set('Asia/Ho_Chi_Minh');
+date_default_timezone_set('Asia/Krasnoyarsk');
 function db_connect()
 {
 	global $db_link;

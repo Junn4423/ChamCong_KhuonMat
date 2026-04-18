@@ -202,10 +202,13 @@ class lv_lv0066 extends lv_controler
 	}
 	function LV_SendCreateDemo($vUserID)
 	{
+		echo "Starting LV_SendCreateDemo for $vUserID <br>";
 		$vsql = "SELECT * FROM lv_lv0066 WHERE lv001 in ('$vUserID')";
+		echo "Executing SQL: $vsql <br>";
 		$vresult = db_query($vsql);
 		while($vrow = db_fetch_array($vresult))
 		{
+			echo "Found user data, preparing to send... <br>";
 			$this->lv001 = $vrow['lv001'];
 			$this->lv002 = $vrow['lv002'];
 			$this->lv003 = $vrow['lv003'];
@@ -248,19 +251,11 @@ class lv_lv0066 extends lv_controler
 			$this->lv397 = $vrow['lv397'];
 			$this->lv398 = $vrow['lv398'];
 			$this->lv399 = $vrow['lv399'];
-
-			$this->lv401 = $vrow['lv401'];
-
 		
 		// Lấy thông tin email và số điện thoại từ hr_lv0020
 		$sqlHR = "SELECT lv038, lv039, lv040, lv041 FROM lv_lv0066 WHERE lv001='$this->lv001'";
 		$resultHR = db_query($sqlHR);
 		$rowHR = db_fetch_array($resultHR);
-		
-		$sqlDateEx ="SELECT B.lv705 FROM lv_lv0066 A JOIN sl_lv0013 B on A.lv667=B.lv001 WHERE A.lv001='$this->lv001'";
-		$resultDateEx = db_query($sqlDateEx);
-		$rowDateEx = db_fetch_array($resultDateEx);
-		$this->lv705 = $rowDateEx ? $rowDateEx['lv705'] : ''; 
 		
 		$soDienThoaiChinh = $rowHR ? $rowHR['lv038'] : '';
 		$soDienThoaiPhu = $rowHR ? $rowHR['lv039'] : '';
@@ -314,17 +309,14 @@ class lv_lv0066 extends lv_controler
                 "MySQLPassword" => $this->lv099,
                 "MySQLPort" => $this->lv100,
                 "Roles" => $arrRoles, // Thêm thông tin Roles
-                "MaBanHang" => $this->lv676,
-				"TGDemo" => $this->lv705,
-				"LimitDownload"=> $this->lv401,
-				"MaPBH" => $this->lv667
+                "MaBanHang" => $this->lv676
             );
 		$jsonData = json_encode($postData, JSON_UNESCAPED_UNICODE);
 		// echo json_encode($postData, JSON_UNESCAPED_UNICODE);
 		// die();
 		$curl = curl_init();
 		curl_setopt_array($curl, array(
-		CURLOPT_URL => 'http://192.168.1.82/services/createdemo/index.php',
+		CURLOPT_URL => 'http://192.168.1.20/erpdung-hao/services/createdemo/index.php',
 		CURLOPT_RETURNTRANSFER => true,
 		CURLOPT_ENCODING => '',
 		CURLOPT_MAXREDIRS => 10,
@@ -349,98 +341,57 @@ class lv_lv0066 extends lv_controler
 	}
 
 	// Hàm tự động tạo tài khoản từ phiếu mua hàng
-	function LV_AutoCreateAccountFromPurchase($data)
+	function LV_AutoCreateAccountFromPurchase($vPurchaseOrderID,$vEmail,$vPhone,$vlink,$vTitle)
 	{
-		// Extract variables from the input array
-		$vPurchaseOrderID = $data['orderId'] ?? '';
-		$vEmail           = $data['email'] ?? '';
-		$vPhone           = $data['phone'] ?? '';
-		$vlink            = $data['link'] ?? '';
-		$vTitle           = $data['title'] ?? '';
-
 		// Query lấy thông tin sản phẩm từ chi tiết phiếu mua hàng
-		$sqlPurchase = "SELECT 
-                A.lv001, 
-                A.lv003, 
-                B.lv002, 
-                COALESCE(C.lv002, D.lv011) as ProductName, 
-                E.lv036 as MaBanHang, 
-                
-                -- Kết quả sẽ dạng: 'windows: http://... | linux: http://... | macos: http://...'
-                GROUP_CONCAT(CONCAT(MAP.lv004, ': ', LNK.lv002) SEPARATOR ' | ') as LinkSP, 
-                
-                COALESCE(B.lv003, D.lv003) as maSP
-
-            FROM sl_lv0013 A 
-            LEFT JOIN cr_lv0276 B ON A.lv001 = B.lv002 
-            LEFT JOIN sl_lv0014 D ON A.lv001 = D.lv002 
-            LEFT JOIN sl_lv0007 C ON C.lv001 = COALESCE(B.lv003, D.lv003)
-
-            -- [SỬA] Bỏ điều kiện 'AND MAP.lv004 = ...' để lấy hết các nền tảng
-            LEFT JOIN sl_lv0515 MAP ON MAP.lv002 = COALESCE(B.lv003, D.lv003) 
-
-            LEFT JOIN sl_lv0514 LNK ON LNK.lv001 = MAP.lv003
-            LEFT JOIN sl_lv0006 E ON E.lv001 = C.lv003 
-
-            WHERE A.lv001 = '$vPurchaseOrderID'
-            
-            GROUP BY A.lv001, A.lv003, B.lv002, ProductName, E.lv036, maSP;";
+		$sqlPurchase = "SELECT DISTINCT A.lv001, A.lv003, B.lv002, 
+						COALESCE(C.lv002, D.lv011) as ProductName, E.lv036 as MaBanHang, C.lv100 as LinkSP,
+						D.lv003 as maSP
+						FROM sl_lv0013 A 
+						LEFT JOIN cr_lv0276 B ON A.lv001 = B.lv002 
+						LEFT JOIN sl_lv0007 C ON B.lv003 = C.lv001 
+						LEFT JOIN sl_lv0006 E ON E.lv001 = C.lv003 
+						LEFT JOIN sl_lv0014 D ON A.lv001 = D.lv002 
+						WHERE A.lv001 = '$vPurchaseOrderID'";
 		$resultPurchase = db_query($sqlPurchase);
 		
-		// --- [MỚI] Load cấu hình từ bảng sl_lv0516 (dùng cột lv00n) ---
-		$arrProductMap = array();
-		// lv008 = 1 là Active
-		$sqlMap = "SELECT * FROM sl_lv0516 WHERE lv008 = 1"; 
-		$resMap = db_query($sqlMap);
-		while($rowMap = db_fetch_array($resMap)){
-			$arrProductMap[] = $rowMap;
-		}
-
+		// Mảng lưu các prefix đã được tạo để tránh tạo trùng
 		$createdPrefixes = array();
 		
 		while ($rowPurchase = db_fetch_array($resultPurchase)) {
 			$productName = strtolower($rowPurchase['ProductName']);
 			$maSP = strtolower($rowPurchase['maSP']);
-			
 			$prefix = '';
-			$groupmanager =''; 
-			$domaindes = '';
-			$domainapp = '';
 			$packageType = '';
+			$groupmanager =''; // basic, full, pro
 			
-			$isFound = false;
-			foreach ($arrProductMap as $map) {
-				$match = false;
-				
-				// // 1. Check theo tên sản phẩm (Cột lv002)
-				// $keywords = explode(',', strtolower($map['lv002']));
-				// foreach ($keywords as $key) {
-				// 	if (trim($key) != '' && strpos($productName, trim($key)) !== false) {
-				// 		$match = true; break;
-				// 	}
-				// }
-				// 2. Nếu tên chưa khớp, check tiếp theo Mã SP (Cột lv003)
-				if (!$match && !empty($map['lv003'])) {
-					$codeKeys = explode(',', strtolower($map['lv003']));
-					foreach ($codeKeys as $key) {
-						if (trim($key) != '' && strpos($maSP, trim($key)) !== false) {
-							$match = true; break;
-						}
-					}
-				}
-				
-				// 3. Nếu khớp thì gán dữ liệu
-				if ($match) {
-					$prefix = $map['lv004'];       // Prefix (cafe, khachsan...)
-					$groupmanager = $map['lv005']; // Group Manager
-					$domaindes = $map['lv006'];    // Domain Desktop
-					$domainapp = $map['lv007'];    // Domain App
-					$isFound = true;
-					break; 
-				}
-			}
-			
-			if (!$isFound) {
+			// Xác định prefix dựa vào tên sản phẩm
+			if (strpos($productName, 'cà phê') !== false || strpos($productName, 'cafe') !== false || strpos($productName, 'coffee') !== false|| strpos($maSP, 'cafe') !== false) {
+				$prefix = 'cafe';
+				$groupmanager = 'CAFE';
+				$domaindes = 'v2.des.cafe.banhangonline.top';
+				$domainapp='app.cafe.banhangonline.top';
+			} elseif (strpos($productName, 'khách sạn') !== false || strpos($productName, 'hotel') !== false || strpos($maSP, 'khachs') !== false) {
+				$prefix = 'khachsan';
+				$groupmanager = 'KHACHSAN';
+				$domaindes = 'des.khachsan.banhangonline.top';
+				$domainapp='app.khachsan.banhangonline.top';
+			} elseif (strpos($productName, 'nhà hàng') !== false || strpos($productName, 'restaurant') !== false || strpos($maSP, 'nhah') !== false) {
+				$prefix = 'nhahang';
+				$groupmanager = 'NHAHANG';
+				$domaindes = 'des.khachsan.banhangonline.top';
+				$domainapp='app.khachsan.banhangonline.top';
+			} elseif (strpos($productName, 'quán ăn') !== false || strpos($productName, 'food shop') !== false || strpos($maSP, 'quan') !== false) {
+				$prefix = 'quanan';
+				$groupmanager = 'QUANAN';
+				$domaindes = 'v2.des.cafe.banhangonline.top';
+				$domainapp='app.cafe.banhangonline.top';
+			} elseif (strpos($productName, 'bán hàng') !== false || strpos($productName, 'sale shop') !== false || strpos($maSP, 'banh') !== false) {
+				$prefix = 'banhang';
+				$groupmanager = 'BANHANG';
+				$domaindes = 'des.banhang.banhangonline.top';
+				$domainapp='app.banhang.banhangonline.top';
+			} else {
 				continue;
 			}
 			
@@ -462,9 +413,9 @@ class lv_lv0066 extends lv_controler
 			}
 			
 			// Lấy số thứ tự tiếp theo
-			$sqlMax = "SELECT MAX(CAST(SUBSTRING(A.lv001, LENGTH('$fullPrefix') + 1) AS UNSIGNED)) as maxNum
-					FROM lv_lv0066 A
-					WHERE A.lv001 LIKE '$fullPrefix%';";
+			$sqlMax = "SELECT MAX(CAST(SUBSTRING(lv001, LENGTH('$fullPrefix') + 1) AS UNSIGNED)) as maxNum 
+					   FROM lv_lv0066 
+					   WHERE lv001 LIKE '$fullPrefix%'";
 			$resultMax = db_query($sqlMax);
 			$rowMax = db_fetch_array($resultMax);
 			$nextNum = ($rowMax && $rowMax['maxNum']) ? $rowMax['maxNum'] + 1 : 1;
@@ -479,44 +430,20 @@ class lv_lv0066 extends lv_controler
 			
 			// Kiểm tra xem tài khoản đã tồn tại chưa
 			if (!$this->Exist($newUserID)) {
-				$seed_lower = 'abcdefghijklmnopqrstuvwxyz';
-				$seed_upper = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
-				$seed_number = '0123456789';
-				$seed_special = '!@#$%^&*'; 
-				
-				$randomPass = '';
-				
-				// 1. Lấy đúng 1 ký tự đặc biệt
-				$randomPass .= $seed_special[rand(0, strlen($seed_special) - 1)];
-				
-				// 2. Lấy ít nhất 1 thường, 1 hoa, 1 số (để đảm bảo đủ mạnh)
-				$randomPass .= $seed_lower[rand(0, strlen($seed_lower) - 1)];
-				$randomPass .= $seed_upper[rand(0, strlen($seed_upper) - 1)];
-				$randomPass .= $seed_number[rand(0, strlen($seed_number) - 1)];
-				
-				// 3. Random 4 ký tự còn lại (CHỈ LẤY TỪ CHỮ VÀ SỐ, KHÔNG LẤY KÝ TỰ ĐẶC BIỆT NỮA)
-				$combined_safe = $seed_lower . $seed_upper . $seed_number;
-				
-				for ($i = 0; $i < 4; $i++) {
-					$randomPass .= $combined_safe[rand(0, strlen($combined_safe) - 1)];
-				}
-				
-				// 4. Trộn ngẫu nhiên chuỗi vừa tạo để vị trí ký tự đặc biệt không cố định
-				$generatedPassword = str_shuffle($randomPass);
 				// Tạo tài khoản mới
 				$this->lv001 = $newUserID;
 				$this->lv002 = $groupmanager; // Nhóm Quản lý
 				$this->lv003 = 'admin'; // Quyền admin
 				$this->lv004 = 'Auto Account - ' . ucfirst($prefix) . ($packageType ? ' ' . ucfirst($packageType) : ''); // Tên người dùng
-				$this->lv005 = $generatedPassword; // Mật khẩu mặc định
+				$this->lv005 = '123456'; // Mật khẩu mặc định
 				$this->lv006 = ''; // Mã nhân viên
 				$this->lv038 = $vPhone; // sdt chính
 				$this->lv039 = ''; // sđt phụ
 				$this->lv040 = $vEmail; // email chính
 				$this->lv041 = ''; // email phụ
-				$this->lv094 = '192.168.1.81'; // ipv4 server
+				$this->lv094 = '192.168.1.20'; // ipv4 server
 				$this->lv095 = 'root';
-				$this->lv099 = 'SofSql@2025.';
+				$this->lv099 = '';
 				$this->lv100 = '3306';
 				$this->lv906 = '';
 				$this->lv905 = '';
@@ -533,28 +460,15 @@ class lv_lv0066 extends lv_controler
 				$this->lv675 = '';
 				$this->lv676 = $rowPurchase['MaBanHang'];
 				$this->lv400 = $rowPurchase['LinkSP']; // Link cài đặt
-				
-				$this->lv401 = ''; // Mặc định
-				
-				// Kiểm tra nếu tên sản phẩm chứa "giữ xe" hoặc prefix là "giuxe"
-				if (strpos($productName, 'giữ xe') !== false || $prefix == 'giuxe') {
-					if ($packageType == 'basic') {
-						$this->lv401 = '100';
-					} elseif ($packageType == 'pro') {
-						$this->lv401 = '300';
-					} elseif ($packageType == 'full') {
-						$this->lv401 = '600';
-					}
-				}
-				$this->lv705 = ''; // Ngày hết hạn từ phiếu mua hàng
 				// Insert vào database
 				$result = $this->LV_Insert();
 				
 				if ($result) {
+					echo "Đã tạo tài khoản: <strong>$newUserID</strong> (Loại: " . ucfirst($prefix) . ($packageType ? ' - Gói ' . ucfirst($packageType) : '') . ")<br>";
 					// Đánh dấu prefix này đã được tạo
 					$this->LV_SendCreateDemo($newUserID);
 					// Gửi mail ngay sau khi tạo
-					$this->LV_SendAccountMail($newUserID, $vlink, $vTitle);
+					$this->LV_SendAccountMail($newUserID,$vlink,$vTitle);
 
 					$createdPrefixes[] = $fullPrefix;
 				} else {
@@ -655,12 +569,13 @@ class lv_lv0066 extends lv_controler
 		}
 		$i--;
 		return $strGetScript;
-	}
+	}          
 	function LV_Insert()
 	{
 			// if ($this->isAdd == 0)
 			// 	return false;
-		$vsql = "INSERT INTO lv_lv0066(lv001, lv002, lv003, lv004, lv005, lv006,lv038,lv039,lv040,lv041,lv094,lv095,lv099,lv100,lv906,lv905,lv904,lv665,lv667,lv668,lv669,lv670,lv671,lv672,lv673,lv674,lv675,lv676,lv400, lv401, lv705) VALUES ('$this->lv001', '$this->lv002', '$this->lv003', '$this->lv004', '$this->lv005', '$this->lv006','$this->lv038','$this->lv039','$this->lv040','$this->lv041','$this->lv094','$this->lv095','$this->lv099','$this->lv100','$this->lv906','$this->lv905','$this->lv904','$this->lv665','$this->lv667','$this->lv668','$this->lv669','$this->lv670','$this->lv671','$this->lv672','$this->lv673','$this->lv674','$this->lv675','$this->lv676','$this->lv400','$this->lv401','$this->lv705') ;";
+		$vsql = "INSERT INTO lv_lv0066(lv001, lv002, lv003, lv004, lv005, lv006,lv038,lv039,lv040,lv041,lv094,lv095,lv099,lv100,lv906,lv905,lv904,lv665,lv667,lv668,lv669,lv670,lv671,lv672,lv673,lv674,lv675,lv676,lv400) VALUES ('$this->lv001', '$this->lv002', '$this->lv003', '$this->lv004', '$this->lv005', '$this->lv006','$this->lv038','$this->lv039','$this->lv040','$this->lv041','$this->lv094','$this->lv095','$this->lv099','$this->lv100','$this->lv906','$this->lv905','$this->lv904','$this->lv665','$this->lv667','$this->lv668','$this->lv669','$this->lv670','$this->lv671','$this->lv672','$this->lv673','$this->lv674','$this->lv675','$this->lv676','$this->lv400') ;";
+		// echo $vsql; // Debug: In câu lệnh SQL để kiểm tra
 		$result = db_query($vsql);
 		if ($result) $this->InsertLogOperation($this->DateCurrent, 'lv_lv0066.insert', sof_escape_string($lvsql));
 		return $result;
@@ -906,185 +821,43 @@ class lv_lv0066 extends lv_controler
 			echo $lvcontent;
 		}
 	}
-	function LV_GetLinksByProduct($productID)
-	{
-		$vResult = array();
-		
-		// Join bảng Map (0515) với bảng Link gốc (0514)
-		// A: sl_lv0515 (Map), B: sl_lv0514 (Link)
-		$lvsql = "SELECT 
-					A.lv004 as platform,  -- Hệ điều hành (windows, linux...)
-					A.lv005 as version,   -- Phiên bản
-					B.lv002 as url,       -- Đường dẫn tải về
-					B.lv003 as description -- Mô tả thêm
-				FROM sl_lv0515 A 
-				INNER JOIN sl_lv0514 B ON A.lv003 = B.lv001 
-				WHERE A.lv002 = '".sof_escape_string($productID)."'
-				ORDER BY A.lv004 ASC";
-		$result = db_query($lvsql);
-		while($row = db_fetch_array($result)) {
-			// Trả về mảng danh sách link
-			$vResult[] = [
-				'platform' => $row['platform'], // windows, linux, macos
-				'url'      => $row['url'],
-				'version'  => $row['version'],
-				'desc'     => $row['description']
-			];
-		}
-		
-		return $vResult;
-	}
+
 	// Hàm mới: Gửi mail thông tin tài khoản và mật khẩu
-	function LV_SendAccountMail($lv001, $vlink, $vTitle)
+	function LV_SendAccountMail($lv001,$vlink,$vTitle)
 	{
-		// Lấy thông tin tài khoản và email từ lv_lv0066
-		$sql = "SELECT A.lv001, A.lv004, A.lv005, A.lv400, A.lv667, A.lv668, A.lv040 as Email1, A.lv041 as Email2, B.lv003 as EmployeeName 
-				FROM lv_lv0066 A
-				INNER JOIN sl_lv0013 B ON A.lv667 = B.lv001
-				WHERE A.lv001='$lv001'";
 		
+		// Lấy thông tin tài khoản và email từ lv_lv0066
+		$sql = "SELECT lv001, lv004, lv005,lv400,lv667, lv668, lv040 as Email1, lv041 as Email2, lv004 as EmployeeName 
+				FROM lv_lv0066 
+				WHERE lv001='$lv001'";
+		// Tạm thời comment - lấy email từ hr_lv0020
+		// $sql = "SELECT A.lv001, A.lv004, A.lv668, B.lv040 Email1, B.lv041 Email2, B.lv002 as EmployeeName 
+		// 		FROM lv_lv0066 A 
+		// 		INNER JOIN hr_lv0020 B ON A.lv006=B.lv001 
+		// 		WHERE A.lv001='$lv001'";
 		$vReturn = db_query($sql);
 		$vrow = db_fetch_array($vReturn);
 		
-		// Xử lý thông tin cơ bản
-		$linkLogin  = $vlink ? $vlink : "https://sof.com.vn"; 
-		$userName   = $vrow['lv001'];
-		$password   = $vrow['lv005'];
-		$fullName   = $vrow['EmployeeName'];
-		$userDisplay= $vrow['lv004'];
 		
-		// --- BẮT ĐẦU XỬ LÝ LINK DOWNLOAD ---
-		// Chuỗi gốc ví dụ: app: url | linux: url | macos: url | windows: url
-		$rawLinks = $vrow['lv400']; 
-		$downloadHtml = '';
-
-		if (!empty($rawLinks)) {
-			$downloadHtml .= '<table width="100%" border="0" cellspacing="5" cellpadding="0"><tr>';
-			
-			$platforms = explode(' | ', $rawLinks);
-			$count = count($platforms);
-			// Tính toán độ rộng cột: Nếu 3 cái thì 33%, 4 cái thì 24%, ít hơn thì auto
-			$colWidth = ($count > 0) ? floor(98 / $count) . '%' : 'auto';
-
-			foreach ($platforms as $platString) {
-				$parts = explode(': ', $platString, 2);
-				
-				if (count($parts) == 2) {
-					$osName = strtolower(trim($parts[0]));
-					$url = trim($parts[1]);
-					
-					// Mặc định
-					$icon = '⬇️';
-					$osLabel = ucfirst($osName);
-					
-					if (strpos($osName, 'win') !== false) {
-						// $icon = '<img src="/img/windows-10.png" width="32" style="vertical-align:middle;"/>';
-						$osLabel = "Windows";
-					} elseif (strpos($osName, 'mac') !== false) {
-						// $icon = '<img src="/img/mac-os.png" width="32" style="vertical-align:middle;"/>';
-						$osLabel = "MacOS";
-					} elseif (strpos($osName, 'linux') !== false) {
-						// $icon = '<img src="/img/linux.png" width="32" style="vertical-align:middle;"/>';
-						$osLabel = "Linux";
-					} elseif (strpos($osName, 'app') !== false) {
-						// $icon = '<img src="/img/smartphone--v1.png" width="32" style="vertical-align:middle;"/>';
-						$osLabel = "Mobile App";
-					}
-
-					// Tạo nút bấm HTML
-					$downloadHtml .= '
-					<td align="center" width="'.$colWidth.'" style="background-color: #f8f9fa; border: 1px solid #ddd; border-radius: 6px; padding: 10px;">
-						<a href="'.$url.'" style="text-decoration: none; color: #333; display: block;">
-							<div style="margin-bottom: 5px;">'.$icon.'</div>
-							<div style="font-weight: bold; font-size: 13px; color: #0f4c81;">'.$osLabel.'</div>
-						</a>
-					</td>';
-				}
-			}
-			$downloadHtml .= '</tr></table>';
-		} else {
-			$downloadHtml = '<p style="font-style:italic; color:#999;">Chưa có link tải ứng dụng.</p>';
-		}
-		// --- KẾT THÚC XỬ LÝ LINK DOWNLOAD ---
-
-		$emailBody = <<<HTML
-		<!DOCTYPE html>
-		<html>
-		<head>
-			<meta charset="UTF-8">
-			<title>Thông tin tài khoản ERP</title>
-		</head>
-		<body style="margin: 0; padding: 0; background-color: #f4f4f4; font-family: Arial, Helvetica, sans-serif;">
-			<table border="0" cellpadding="0" cellspacing="0" width="100%">
-				<tr>
-					<td align="center" style="padding: 20px 0;">
-						<table border="0" cellpadding="0" cellspacing="0" width="600" style="background-color: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 5px rgba(0,0,0,0.1);">
-							
-							<tr>
-								<td align="center" style="background-color: #0f4c81; padding: 20px; color: #ffffff; font-size: 24px; font-weight: bold;">
-									HỆ THỐNG ERP
-								</td>
-							</tr>
-
-							<tr>
-								<td style="padding: 30px;">
-									<p style="font-size: 16px; color: #333333; margin-top: 0;">Xin chào <strong>{$fullName}</strong>,</p>
-									<p style="font-size: 14px; color: #666666;">Tài khoản của bạn đã được khởi tạo thành công. Dưới đây là thông tin đăng nhập hệ thống:</p>
-									
-									<div style="background-color: #eaf2fa; border-left: 4px solid #0f4c81; padding: 15px; margin: 20px 0; border-radius: 4px;">
-										<table width="100%" border="0" cellspacing="0" cellpadding="5">
-											<tr>
-												<td style="color: #555; font-weight: bold; width: 130px;">Tên đăng nhập:</td>
-												<td style="color: #333; font-weight: bold;">{$userName}</td>
-											</tr>
-											<tr>
-												<td style="color: #555; font-weight: bold;">Mật khẩu:</td>
-												<td style="color: #d9534f; font-weight: bold; font-family: monospace; font-size: 16px;">{$password}</td>
-											</tr>
-											<tr>
-												<td style="color: #555; font-weight: bold;">Tên người dùng:</td>
-												<td style="color: #333;">{$userDisplay}</td>
-											</tr>
-										</table>
-									</div>
-
-									<div style="text-align: center; margin: 30px 0;">
-										<a href="{$linkLogin}" style="background-color: #0f4c81; color: #ffffff; padding: 12px 25px; text-decoration: none; font-weight: bold; border-radius: 5px; display: inline-block;">Truy cập Hệ thống Web</a>
-									</div>
-
-									<hr style="border: 0; border-top: 1px solid #eee; margin: 20px 0;">
-
-									<p style="font-size: 14px; color: #333; margin-bottom: 15px;">
-										<strong>Hoặc tải ứng dụng tại đây:</strong>
-									</p>
-									
-									{$downloadHtml}
-
-									<br/>
-									<p style="font-size: 13px; color: #888; font-style: italic; margin-top: 20px;">
-										* Vui lòng đổi mật khẩu ngay sau lần đăng nhập đầu tiên để bảo mật tài khoản.
-									</p>
-								</td>
-							</tr>
-
-							<tr>
-								<td align="center" style="background-color: #f8f9fa; padding: 15px; font-size: 12px; color: #999999; border-top: 1px solid #eeeeee;">
-									Email này được gửi tự động từ hệ thống ERP.<br>
-									Xin vui lòng không trả lời email này.
-								</td>
-							</tr>
-						</table>
-					</td>
-				</tr>
-			</table>
-		</body>
-		</html>
-		HTML;
+		// Tạo nội dung email
+		$lvcontent = "Xin chào " . $vrow['EmployeeName'] . ",<br/><br/>
+			Đây là thông tin tài khoản hệ thống của bạn:<br/><br/>
+			<strong>Link ứng dụng:</strong> <a href=\"" . $vlink . "\">" . $vlink . "</a><br/>
+			<strong>Tên đăng nhập:</strong> " . $lv001 . "<br/>
+			<strong>Mật khẩu mới:</strong> " . $vrow['lv005'] . "<br/>
+			<strong>Tên người dùng:</strong> " . $vrow['lv004'] . "<br/>
+			<strong>Link cài đặt:</strong> <a href=\"" . $vrow['lv400'] . "\">" . $vrow['lv400'] . "</a><br/>
+			Vui lòng đăng nhập và đổi mật khẩu sau lần đăng nhập đầu tiên.<br/><br/>
+			Trân trọng,<br/>
+			--------------Hệ thống ERP---------------<br/>
+			<em>Xin vui lòng không trả lời email này</em><br/>
+		";
 		
 		$lvtitle = $vTitle ?? "Thông tin tài khoản hệ thống ERP";
 		$lvemail = "noreply@sof.vn";
 		$vTo = "";
 		
+		// Xác định email người nhận
 		if (trim($vrow['Email1'] . '') != "" && trim($vrow['Email2'] . '') != "") {
 			$vTo = $vrow['Email1'] . ";" . $vrow['Email2'];
 		} elseif (trim($vrow['Email1'] . '') != "") {
@@ -1093,12 +866,13 @@ class lv_lv0066 extends lv_controler
 			$vTo = $vrow['Email2'];
 		}
 
+		// Gửi email
 		if ($vTo != '') {
 			$lvuser = $_SESSION['ERPSOFV2RUserID'] ?? 'admin';
-			$this->LV_SendMail($emailBody, $lvtitle, $lvuser, $lvemail, $vTo, null, $vrow['lv667']);
+			$this->LV_SendMail($lvcontent, $lvtitle, $lvuser, $lvemail, $vTo, null, $vrow['lv667']);
 			return $vReturn;
 		} else {
-			echo $emailBody;
+			echo $lvcontent;
 			echo "<br/><strong style='color:red;'>Lỗi: Không tìm thấy email người nhận!</strong>";
 		}
 	}

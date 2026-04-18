@@ -10,12 +10,18 @@ from datetime import datetime, date
 import cv2
 import numpy as np
 from PIL import Image as PILImage
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, send_file
 
 from backend.models.database import db, User, Attendance, EmployeeImage
 from backend.models.erp_integration import erp_attendance
 from backend.face_encoding_utils import face_encoding_count
 from backend.services.camera_registry import camera_registry
+from backend.services.report_service import (
+    build_report_filter_text,
+    build_report_rows,
+    build_report_workbook,
+    serialize_report_rows,
+)
 from backend.runtime import ensure_data_dir, ensure_db_path
 from backend.routes._state import state
 from backend.routes._helpers import (
@@ -696,6 +702,24 @@ def get_today_attendance():
 @attendance_bp.route('/api/report')
 @admin_required
 def api_report():
+    rows, normalized_filters, summary = build_report_rows(request.args.to_dict(flat=True))
+    return jsonify({
+        'success': True,
+        'records': serialize_report_rows(rows),
+        'summary': summary,
+        'filters': {
+            'start_date': normalized_filters['start_date'].strftime('%Y-%m-%d'),
+            'end_date': normalized_filters['end_date'].strftime('%Y-%m-%d'),
+            'start_time': normalized_filters['start_time'].strftime('%H:%M:%S') if normalized_filters.get('start_time') else '',
+            'end_time': normalized_filters['end_time'].strftime('%H:%M:%S') if normalized_filters.get('end_time') else '',
+            'status': normalized_filters['status'],
+            'keyword': normalized_filters['keyword'],
+            'sort_by': normalized_filters['sort_by'],
+            'sort_dir': normalized_filters['sort_dir'],
+            'description': build_report_filter_text(normalized_filters, summary),
+        },
+    })
+
     try:
         date_str = request.args.get('date', date.today().strftime('%Y-%m-%d'))
         report_date = datetime.strptime(date_str, '%Y-%m-%d').date()
@@ -732,9 +756,102 @@ def api_report():
     return jsonify({'success': True, 'records': res})
 
 
+@attendance_bp.route('/api/report/export_xlsx')
+@admin_required
+def api_report_export_xlsx():
+    try:
+        rows, normalized_filters, summary = build_report_rows(request.args.to_dict(flat=True))
+        workbook_stream = build_report_workbook(rows, normalized_filters, summary)
+        filename = (
+            f"attendance_{normalized_filters['start_date'].strftime('%Y%m%d')}"
+            f"_{normalized_filters['end_date'].strftime('%Y%m%d')}.xlsx"
+        )
+        return send_file(
+            workbook_stream,
+            as_attachment=True,
+            download_name=filename,
+            mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        )
+    except Exception as exc:
+        return jsonify({'success': False, 'message': str(exc)}), 500
+
+
 @attendance_bp.route('/api/report/push_to_erp', methods=['POST'])
 @admin_required
 def api_report_push_to_erp():
+    payload = request.get_json(silent=True) or {}
+    if resolve_request_auth_mode(default='internal') != 'system':
+        return jsonify({
+            'success': False,
+            'message': 'Dang o che do noi bo. Vui long dang nhap he thong de day du lieu.',
+        }), 403
+
+    rows, normalized_filters, summary = build_report_rows(payload)
+    if not rows:
+        return jsonify({
+            'success': True,
+            'message': 'Khong co du lieu diem danh de day len ERP',
+            'result': {
+                'start_date': normalized_filters['start_date'].strftime('%Y-%m-%d'),
+                'end_date': normalized_filters['end_date'].strftime('%Y-%m-%d'),
+                'total': 0,
+                'pushed': 0,
+                'failed': 0,
+                'failed_employee_ids': [],
+                'records': 0,
+            },
+        })
+
+    pushed = 0
+    failed_ids = []
+    total_events = 0
+    for row in rows:
+        att = row.get('_attendance')
+        user = row.get('_user')
+        if att is None or user is None:
+            continue
+
+        events = []
+        checkin_time = att.check_in_time or datetime.combine(
+            att.date or normalized_filters['start_date'],
+            datetime.min.time(),
+        )
+        events.append(('IN', checkin_time))
+        if att.check_out_time:
+            events.append(('OUT', att.check_out_time))
+
+        for event_code, event_time in events:
+            total_events += 1
+            ok = erp_attendance.create_attendance_record(
+                employee_id=user.employee_id,
+                attendance_time=event_time,
+                attendance_code=event_code,
+            )
+            if ok:
+                pushed += 1
+            else:
+                failed_ids.append(f"{user.employee_id}:{event_code}")
+
+    failed = len(failed_ids)
+    total = total_events
+    message = f'Da day {pushed}/{total} ban ghi len ERP.'
+    if failed:
+        message += f' Co {failed} ban ghi that bai.'
+
+    return jsonify({
+        'success': failed == 0,
+        'message': message,
+        'result': {
+            'start_date': normalized_filters['start_date'].strftime('%Y-%m-%d'),
+            'end_date': normalized_filters['end_date'].strftime('%Y-%m-%d'),
+            'total': total,
+            'pushed': pushed,
+            'failed': failed,
+            'failed_employee_ids': failed_ids,
+            'records': summary.get('total_records', 0),
+        },
+    })
+
     if resolve_request_auth_mode(default='internal') != 'system':
         return jsonify({
             'success': False,

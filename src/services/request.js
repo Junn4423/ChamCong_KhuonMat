@@ -49,17 +49,21 @@ export function clearSessionToken() {
   setSessionToken(null)
 }
 
+function buildAuthHeaders(headers = {}) {
+  const nextHeaders = { ...headers }
+  if (sessionToken) {
+    nextHeaders['X-Admin-Token'] = sessionToken
+    nextHeaders['X-Session-Token'] = sessionToken
+  }
+  return nextHeaders
+}
+
 /**
  * Generic fetch wrapper that injects auth header and handles errors.
  */
 export async function request(path, options = {}) {
   const url = `${API_BASE}${path}`
-  const headers = { ...(options.headers || {}) }
-
-  if (sessionToken) {
-    headers['X-Admin-Token'] = sessionToken
-    headers['X-Session-Token'] = sessionToken
-  }
+  const headers = buildAuthHeaders(options.headers || {})
 
   const res = await fetch(url, {
     ...options,
@@ -93,4 +97,41 @@ export async function request(path, options = {}) {
   }
 
   return res.json()
+}
+
+export async function requestBlob(path, options = {}) {
+  const url = `${API_BASE}${path}`
+  const headers = buildAuthHeaders(options.headers || {})
+
+  const res = await fetch(url, {
+    ...options,
+    headers,
+  })
+
+  if (res.status === 401) {
+    clearSessionToken()
+    notifySessionExpired()
+    throw new Error(EXPIRED_SESSION_MESSAGE)
+  }
+
+  if (!res.ok) {
+    try {
+      const payload = await res.json()
+      throw new Error(payload?.message || `HTTP ${res.status}: ${res.statusText}`)
+    } catch (error) {
+      throw new Error(error?.message || `HTTP ${res.status}: ${res.statusText}`)
+    }
+  }
+
+  const contentDisposition = res.headers.get('Content-Disposition') || ''
+  const utf8Match = contentDisposition.match(/filename\*=UTF-8''([^;]+)/i)
+  const basicMatch = contentDisposition.match(/filename="?([^\";]+)"?/i)
+  const filename = utf8Match?.[1]
+    ? decodeURIComponent(utf8Match[1])
+    : (basicMatch?.[1] || '')
+
+  return {
+    blob: await res.blob(),
+    filename,
+  }
 }

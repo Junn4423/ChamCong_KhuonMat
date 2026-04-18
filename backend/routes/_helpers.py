@@ -20,6 +20,7 @@ from flask import request, jsonify, g
 
 from backend.models.database import db, AttendanceLocation, EmployeeImage
 from backend.services.erp_http_client import ERPServiceError, erp_http_client
+from backend.services.geocoding_service import enrich_location_payload
 from backend.routes._state import state
 
 
@@ -306,7 +307,7 @@ def parse_location_payload(payload):
     accuracy = coerce_float(loc.get('accuracy'))
     label = (loc.get('label') or loc.get('address') or '').strip()
     provider = (loc.get('provider') or '').strip()
-    return {
+    normalized_payload = {
         'latitude': lat,
         'longitude': lng,
         'accuracy': accuracy,
@@ -314,17 +315,19 @@ def parse_location_payload(payload):
         'provider': provider,
         'timestamp': datetime.now().isoformat(),
     }
+    return enrich_location_payload(normalized_payload)
 
 
 def location_to_text(location_payload):
     if not isinstance(location_payload, dict):
         return ''
+    location_payload = enrich_location_payload(location_payload) or location_payload
     lat = location_payload.get('latitude')
     lng = location_payload.get('longitude')
     if lat is None or lng is None:
         return ''
     accuracy = location_payload.get('accuracy')
-    label = (location_payload.get('label') or '').strip()
+    label = (location_payload.get('label') or location_payload.get('address') or '').strip()
     base = f"{lat:.6f}, {lng:.6f}"
     if accuracy is not None:
         base += f" ±{accuracy:.0f}m"
@@ -339,7 +342,7 @@ def set_runtime_location(location_payload, enabled=None):
         crs['location_enabled'] = bool(enabled)
     if location_payload is None:
         return
-    crs['latest_location'] = dict(location_payload)
+    crs['latest_location'] = dict(enrich_location_payload(location_payload) or location_payload)
     crs['updated_at'] = datetime.now().isoformat()
 
 
@@ -362,6 +365,7 @@ def get_runtime_location(max_age_seconds=600):
 def save_attendance_location(attendance_id, location_payload, source='client'):
     if not attendance_id or not location_payload:
         return None
+    location_payload = enrich_location_payload(location_payload) or location_payload
     lat = coerce_float(location_payload.get('latitude'))
     lng = coerce_float(location_payload.get('longitude'))
     if lat is None or lng is None:
@@ -371,7 +375,7 @@ def save_attendance_location(attendance_id, location_payload, source='client'):
         latitude=lat,
         longitude=lng,
         accuracy=coerce_float(location_payload.get('accuracy')),
-        label=(location_payload.get('label') or '')[:255],
+        label=(location_payload.get('label') or location_payload.get('address') or '')[:255],
         source=(source or 'client')[:32],
         raw=str(location_payload)[:2000],
     )
@@ -474,6 +478,12 @@ def _build_session_user(auth_info):
         'lv705': auth_info.get('lv705', ''),
         'lv667': auth_info.get('lv667', ''),
         'lv040': auth_info.get('lv040', ''),
+        'route_prefix': auth_info.get('route_prefix', ''),
+        'routed_database': auth_info.get('routed_database', ''),
+        'dispatch_database': auth_info.get('dispatch_database', ''),
+        'system_name': auth_info.get('system_name', ''),
+        'system_note': auth_info.get('system_note', ''),
+        'welcome_message': auth_info.get('welcome_message', ''),
         'device_type': auth_info.get('device_type', ''),
         'type_code': auth_info.get('type_code', ''),
         'quota_exceeded': bool(auth_info.get('quota_exceeded', False)),
@@ -503,6 +513,12 @@ def _to_auth_object(payload):
             'lv900',
             'device_type',
             'type_code',
+            'route_prefix',
+            'routed_database',
+            'dispatch_database',
+            'system_name',
+            'system_note',
+            'welcome_message',
         ):
             value = payload.get(key)
             if isinstance(value, str):
@@ -538,6 +554,12 @@ def issue_session(auth_info):
         'lv900': (auth_info.get('lv900') or '').strip(),
         'device_type': (auth_info.get('device_type') or '').strip(),
         'type_code': (auth_info.get('type_code') or '').strip(),
+        'route_prefix': (auth_info.get('route_prefix') or '').strip(),
+        'routed_database': (auth_info.get('routed_database') or '').strip(),
+        'dispatch_database': (auth_info.get('dispatch_database') or '').strip(),
+        'system_name': (auth_info.get('system_name') or '').strip(),
+        'system_note': (auth_info.get('system_note') or '').strip(),
+        'welcome_message': (auth_info.get('welcome_message') or '').strip(),
     }
     user_payload = _build_session_user(auth_info)
     state.erp_sessions[token] = {

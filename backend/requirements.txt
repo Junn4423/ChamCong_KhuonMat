@@ -12,3 +12,4 @@ easydict
 insightface
 onnxruntime
 python-dotenv
+openpyxl

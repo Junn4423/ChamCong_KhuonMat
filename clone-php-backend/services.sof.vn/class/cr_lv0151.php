@@ -218,11 +218,11 @@ class   cr_lv0151 extends lv_controler
 			$vKetQua = $this->LV_Insert();
 			if ($vKetQua) {
 				$vAttachID = $this->InsertIDNow;
-				$lvsql = "insert into erp_sof_documents_v4_0.cri_lv0151(lv002,lv003,lv004,lv005,lv006,lv007,lv008,lv009) select '$vAttachID',lv003,lv004,lv005,lv006,'$vInsertID',lv008,lv009 from erp_sof_documents_v4_0.cri_lv0149 where lv007='" . $vrow['lv001'] . "'";
+				$lvsql = "insert into hao_erp_sof_documents_v5_0.cri_lv0151(lv002,lv003,lv004,lv005,lv006,lv007,lv008,lv009) select '$vAttachID',lv003,lv004,lv005,lv006,'$vInsertID',lv008,lv009 from hao_erp_sof_documents_v5_0.cri_lv0149 where lv007='" . $vrow['lv001'] . "'";
 				$vReturn1 = db_query($lvsql);
 				if ($vReturn1) {
-					$this->InsertLogOperation($this->DateCurrent, 'erp_sof_documents_v4_0.cri_lv0151.insert', sof_escape_string($lvsql));
-					$lvsql1 = "delete from erp_sof_documents_v4_0.cri_lv0149 where lv007='" . $vrow['lv001'] . "'";
+					$this->InsertLogOperation($this->DateCurrent, 'hao_erp_sof_documents_v5_0.cri_lv0151.insert', sof_escape_string($lvsql));
+					$lvsql1 = "delete from hao_erp_sof_documents_v5_0.cri_lv0149 where lv007='" . $vrow['lv001'] . "'";
 					$vReturn2 = db_query($lvsql1);
 					//$lvsql1="delete from cr_lv0365 where lv001='".$vrow['lv001']."'";
 					//$vReturn= db_query($lvsql1);

@@ -15,10 +15,18 @@ from urllib.parse import urljoin, urlparse
 
 from backend.config import (
     ERP_COUCHDB_DB,
+    ERP_COUCHDB_DISPATCHER_DB,
+    ERP_COUCHDB_FALLBACK_DISPATCHER_DB,
+    ERP_COUCHDB_FALLBACK_HOST,
+    ERP_COUCHDB_FALLBACK_PASSWORD,
+    ERP_COUCHDB_FALLBACK_PORT,
+    ERP_COUCHDB_FALLBACK_USER,
     ERP_COUCHDB_HOST,
     ERP_COUCHDB_LOG_DOC_ID,
     ERP_COUCHDB_PASSWORD,
     ERP_COUCHDB_PORT,
+    ERP_COUCHDB_ROUTE_DOC_PREFIX,
+    ERP_COUCHDB_ROUTE_PREFIX_LENGTH,
     ERP_COUCHDB_USER,
     ERP_COUCHDB_USER_TABLE,
     ERP_HTTP_DEVICE_TYPE,
@@ -54,6 +62,9 @@ class ERPHttpClient:
         couchdb_host=None,
         couchdb_port=None,
         couchdb_db=None,
+        couchdb_dispatcher_db=None,
+        couchdb_route_doc_prefix=None,
+        couchdb_route_prefix_length=None,
         couchdb_user_table=None,
         couchdb_user=None,
         couchdb_password=None,
@@ -75,6 +86,26 @@ class ERPHttpClient:
         self.couchdb_host = (couchdb_host or ERP_COUCHDB_HOST or '').strip()
         self.couchdb_port = int(couchdb_port or ERP_COUCHDB_PORT or 5984)
         self.couchdb_db = (couchdb_db or ERP_COUCHDB_DB or '').strip()
+        self.couchdb_dispatcher_db = (
+            couchdb_dispatcher_db
+            or ERP_COUCHDB_DISPATCHER_DB
+            or self.couchdb_db
+        ).strip()
+        self.couchdb_route_doc_prefix = (
+            couchdb_route_doc_prefix
+            or ERP_COUCHDB_ROUTE_DOC_PREFIX
+            or 'dispatcher:prefix:'
+        ).strip()
+        # Deprecated: routing no longer depends on fixed prefix length.
+        raw_prefix_length = (
+            couchdb_route_prefix_length
+            if couchdb_route_prefix_length is not None
+            else ERP_COUCHDB_ROUTE_PREFIX_LENGTH
+        )
+        try:
+            self.couchdb_route_prefix_length = int(raw_prefix_length)
+        except (TypeError, ValueError):
+            self.couchdb_route_prefix_length = 0
         self.couchdb_user_table = (couchdb_user_table or ERP_COUCHDB_USER_TABLE or 'lv_lv0066').strip()
         self.couchdb_user = (couchdb_user or ERP_COUCHDB_USER or '').strip()
         self.couchdb_password = (couchdb_password or ERP_COUCHDB_PASSWORD or '').strip()
@@ -117,6 +148,14 @@ class ERPHttpClient:
             password=self.couchdb_password,
             timeout=self.timeout,
             log_doc_id=self.couchdb_log_doc_id,
+            dispatcher_database=self.couchdb_dispatcher_db,
+            route_doc_prefix=self.couchdb_route_doc_prefix,
+            route_prefix_length=self.couchdb_route_prefix_length,
+            fallback_host=ERP_COUCHDB_FALLBACK_HOST,
+            fallback_port=ERP_COUCHDB_FALLBACK_PORT,
+            fallback_dispatcher_database=ERP_COUCHDB_FALLBACK_DISPATCHER_DB,
+            fallback_username=ERP_COUCHDB_FALLBACK_USER,
+            fallback_password=ERP_COUCHDB_FALLBACK_PASSWORD,
         )
 
     def capabilities(self):
@@ -324,6 +363,12 @@ class ERPHttpClient:
             'quota_exceeded',
             'quota_message',
             'storage_info',
+            'route_prefix',
+            'routed_database',
+            'dispatch_database',
+            'system_name',
+            'system_note',
+            'welcome_message',
         ):
             value = response.get(key)
             if value not in (None, ''):
@@ -342,6 +387,7 @@ class ERPHttpClient:
     def list_employees(self, auth):
         employees = []
         errors = []
+        had_explicit_success = False
         service_headers = self._build_service_headers(auth)
 
         # Prefer `data` because some deployments return reduced columns on `LayNhanVien`
@@ -349,20 +395,28 @@ class ERPHttpClient:
         for func_name in ('data', 'LayNhanVien'):
             try:
                 payload = self._build_auth_payload(auth, table='hr_lv0020', func=func_name)
-                response = self._post_json(self.service_url, payload, headers=service_headers)
+                response = self._post_json(self._resolve_service_url(auth), payload, headers=service_headers)
                 if self._is_invalid_session_response(response):
                     raise ERPServiceError(
                         'Phien lam viec ERP da het han, vui long dang nhap lai',
                         status_code=401,
                         payload=response,
                     )
+                service_error = self._extract_service_error(response)
+                if service_error:
+                    raise ERPServiceError(service_error, status_code=502, payload=response)
+                if self._is_explicit_success_response(response):
+                    had_explicit_success = True
                 employees = self._map_employees(response)
                 if employees:
                     break
             except ERPServiceError as exc:
                 errors.append(exc)
 
-        if not employees and errors and all((exc.status_code == 401 for exc in errors if exc.status_code)):
+        if not employees and errors and not had_explicit_success:
+            auth_errors = [exc for exc in errors if exc.status_code in (401, 403)]
+            if auth_errors:
+                raise auth_errors[-1]
             raise errors[-1]
 
         return employees
@@ -384,12 +438,15 @@ class ERPHttpClient:
                 maNhanVien=employee_id,
             )
             response = self._post_json(
-                self.service_url,
+                self._resolve_service_url(auth),
                 payload,
                 headers=self._build_service_headers(auth),
             )
             if self._is_invalid_session_response(response):
                 raise ERPServiceError('Phien lam viec ERP da het han, vui long dang nhap lai', status_code=401)
+            service_error = self._extract_service_error(response)
+            if service_error:
+                raise ERPServiceError(service_error, status_code=502, payload=response)
             matches = self._map_employees(response)
         except ERPServiceError as exc:
             if exc.status_code == 401:
@@ -500,7 +557,7 @@ class ERPHttpClient:
 
         if self._looks_like_image_ref(image_ref):
             try:
-                url = self._build_employee_image_url(image_ref)
+                url = self._build_employee_image_url(image_ref, auth=auth)
                 image_bytes, content_type = self._open(
                     url,
                     headers={
@@ -557,7 +614,7 @@ class ERPHttpClient:
             cot=image_column or self.image_column,
         )
         image_bytes, content_type = self._post_form(
-            self.service_url,
+            self._resolve_service_url(auth),
             payload,
             expect_json=False,
             headers=self._build_service_headers(auth),
@@ -622,7 +679,7 @@ class ERPHttpClient:
             cot=image_column or self.image_column,
         )
         response = self._post_multipart(
-            self.service_url,
+            self._resolve_service_url(auth),
             fields,
             file_field='image',
             filename=filename,
@@ -895,7 +952,7 @@ class ERPHttpClient:
         )
 
         response = self._post_json(
-            self.service_url,
+            self._resolve_service_url(auth),
             payload,
             headers=self._build_service_headers(auth),
         )
@@ -989,6 +1046,32 @@ class ERPHttpClient:
                 return text
         return ''
 
+    def _resolve_service_url(self, auth):
+        auth = auth or {}
+        domain = self._pick_auth_value(auth, 'domain')
+        if not domain:
+            return self.service_url
+
+        method = (self._pick_auth_value(auth, 'method') or 'http').lower()
+        if method not in {'http', 'https'}:
+            method = 'http'
+
+        candidate = domain.strip()
+        parsed = urlparse(candidate)
+        if not parsed.scheme:
+            candidate = f'{method}://{candidate.lstrip("/")}'
+
+        candidate = candidate.rstrip('/')
+        lower_candidate = candidate.lower()
+        if lower_candidate.endswith('/services.sof.vn/index.php'):
+            return candidate
+        if lower_candidate.endswith('/services.sof.vn'):
+            return f'{candidate}/index.php'
+        if lower_candidate.endswith('/index.php'):
+            return candidate
+
+        return f'{candidate}/services.sof.vn/index.php'
+
     def _build_service_headers(self, auth):
         auth = auth or {}
         headers = self._build_gateway_headers()
@@ -1025,6 +1108,60 @@ class ERPHttpClient:
             error_type = str(value.get('errorType', '')).strip().lower()
             if error_type == 'unauthorized':
                 return True
+        return False
+
+    @staticmethod
+    def _extract_service_error(value):
+        if isinstance(value, list):
+            # Legacy PHP formats:
+            #   [success, message, data]
+            #   [success, data]
+            if value and isinstance(value[0], bool):
+                success = value[0]
+                if not success:
+                    message = ''
+                    for item in value[1:]:
+                        if isinstance(item, str) and item.strip():
+                            message = item.strip()
+                            break
+                        if isinstance(item, dict):
+                            message = str(item.get('message') or item.get('error') or item.get('reason') or '').strip()
+                            if message:
+                                break
+                    return message or 'ERP service tra ve loi'
+            return ''
+
+        if not isinstance(value, dict):
+            return ''
+
+        if value.get('success') is False:
+            return str(value.get('message') or value.get('error') or value.get('reason') or 'ERP service tra ve loi').strip()
+
+        status_text = str(value.get('status') or '').strip().lower()
+        if status_text in {'error', 'failed', 'fail'}:
+            return str(value.get('message') or value.get('error') or value.get('reason') or 'ERP service tra ve loi').strip()
+
+        error_type = str(value.get('errorType') or '').strip().lower()
+        if error_type in {'error', 'failed', 'fail'}:
+            return str(value.get('message') or value.get('error') or value.get('reason') or 'ERP service tra ve loi').strip()
+
+        return ''
+
+    @staticmethod
+    def _is_explicit_success_response(value):
+        if isinstance(value, dict):
+            if 'success' in value:
+                return bool(value.get('success'))
+            status_text = str(value.get('status') or '').strip().lower()
+            if status_text in {'ok', 'success', 'succeed'}:
+                return True
+            return False
+
+        if isinstance(value, list):
+            if value and isinstance(value[0], bool):
+                return bool(value[0])
+            return False
+
         return False
 
     def _map_employees(self, response):
@@ -1096,7 +1233,7 @@ class ERPHttpClient:
 
         return f"{base_url}/{parse.quote(token, safe='')}"
 
-    def _build_employee_image_url(self, image_ref):
+    def _build_employee_image_url(self, image_ref, auth=None):
         parsed = urlparse(image_ref)
         if parsed.scheme and parsed.netloc:
             return image_ref
@@ -1110,13 +1247,32 @@ class ERPHttpClient:
         query = {'filename': filename}
         if subdir:
             query['subdir'] = subdir
-        return f"{self.load_image_url}?{parse.urlencode(query)}"
+        service_url = self._resolve_service_url(auth)
+        service_dir_url = service_url.rsplit('/', 1)[0] + '/'
+        load_image_url = urljoin(service_dir_url, 'loadAnh.php')
+        return f"{load_image_url}?{parse.urlencode(query)}"
 
     @staticmethod
     def _extract_list(value):
         if value is None:
             return []
         if isinstance(value, list):
+            # Legacy PHP formats:
+            #   [success, message, data]
+            #   [success, data]
+            #   [success, data, count]
+            if value and isinstance(value[0], bool):
+                success = bool(value[0])
+                if not success:
+                    return []
+
+                # Prefer the first container payload after the success flag.
+                for candidate in value[1:]:
+                    if isinstance(candidate, list):
+                        return candidate
+                    if isinstance(candidate, dict):
+                        return [candidate]
+                return []
             return value
         if isinstance(value, dict):
             if isinstance(value.get('data'), list):
