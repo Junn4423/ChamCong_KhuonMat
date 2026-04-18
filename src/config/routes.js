@@ -7,6 +7,7 @@ export const ROUTES = Object.freeze({
   syncVerify: '/xu-ly-dong-bo',
   offlineManage: '/quan-ly-nhan-vien-offline',
   report: '/bao-cao',
+  onlineAttendanceCheck: '/kiem-tra-cham-cong-online',
   systemSettings: '/cai-dat-he-thong',
 })
 

@@ -58,6 +58,11 @@ export const attendanceApi = {
     return request(`/api/report${query ? `?${query}` : ''}`)
   },
 
+  getOnlineAttendance: (filters) => {
+    const query = buildReportQuery(filters)
+    return request(`/api/report/online_attendance${query ? `?${query}` : ''}`)
+  },
+
   exportReportExcel: (filters) => {
     const query = buildReportQuery(filters)
     return requestBlob(`/api/report/export_xlsx${query ? `?${query}` : ''}`)

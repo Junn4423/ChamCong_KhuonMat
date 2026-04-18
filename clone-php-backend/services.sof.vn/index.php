@@ -1205,6 +1205,7 @@ include("kebao.php");
 include("haolamvatttu.php");
 include("ngocchung.php");
 include("ngochung_2_wb_intergrate.php");
+include("chamcong_ngocchung.php");
 if ($vfun == 'data') {
 	$i = 1;
 	echo "[";

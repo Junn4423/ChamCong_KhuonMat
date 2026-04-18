@@ -6,6 +6,7 @@ import {
   Camera,
   UserPlus,
   Video,
+  Search,
   Settings,
   BarChart,
   Shuffle,
@@ -26,6 +27,12 @@ const navItems = [
   { to: ROUTES.syncVerify, label: 'Xử lý đồng bộ', icon: Shuffle, moduleKey: MODULE_TOGGLE_KEYS.syncVerify },
   { to: ROUTES.offlineManage, label: 'Quản lý nhân viên offline', icon: Users, moduleKey: MODULE_TOGGLE_KEYS.offlineManage },
   { to: ROUTES.report, label: 'Báo cáo', icon: BarChart, moduleKey: MODULE_TOGGLE_KEYS.report },
+  {
+    to: ROUTES.onlineAttendanceCheck,
+    label: 'Kiểm tra chấm công online',
+    icon: Search,
+    moduleKey: MODULE_TOGGLE_KEYS.onlineAttendanceCheck,
+  },
   { to: ROUTES.systemSettings, label: 'Cài đặt hệ thống', icon: Settings },
 ]
 

@@ -2,6 +2,14 @@ import React, { useEffect, useMemo, useState } from 'react'
 import { Download, RefreshCw, Search, UploadCloud, X } from 'lucide-react'
 import { api, setSessionToken } from '../services/api'
 import { useToast } from '../components/Toast'
+import { ROUTES } from '../config/routes'
+import ReportActionButton from '../components/ReportActionButton'
+
+const DEFAULT_PUSH_STATUS = Object.freeze({
+  key: 'unchecked',
+  label: 'Chưa kiểm tra',
+  missingTypes: [],
+})
 
 function todayString() {
   return new Date().toISOString().split('T')[0]
@@ -49,6 +57,14 @@ function getStatusTone(statusKey) {
   return 'bg-amber-50 text-amber-700 border-amber-100'
 }
 
+function getPushStatusTone(statusKey) {
+  if (statusKey === 'synced') return 'bg-emerald-50 text-emerald-700 border-emerald-100'
+  if (statusKey === 'partial') return 'bg-amber-50 text-amber-700 border-amber-100'
+  if (statusKey === 'missing') return 'bg-rose-50 text-rose-700 border-rose-100'
+  if (statusKey === 'no_data') return 'bg-slate-100 text-slate-600 border-slate-200'
+  return 'bg-slate-100 text-slate-600 border-slate-200'
+}
+
 function describeLocationText(locationText) {
   const raw = String(locationText || '').trim()
   if (!raw) return '-'
@@ -57,6 +73,119 @@ function describeLocationText(locationText) {
   // Report UI should only keep the first readable address segment.
   const cleaned = raw.split('|')[0]?.trim() || ''
   return cleaned || raw
+}
+
+function normalizeEmployeeId(value) {
+  return String(value || '').trim().toUpperCase()
+}
+
+function normalizeDateText(value) {
+  const raw = String(value || '').trim()
+  if (!raw) return ''
+
+  const normalized = raw.split(/[T\s]/)[0]
+  if (/^\d{4}-\d{2}-\d{2}$/.test(normalized)) {
+    return normalized
+  }
+
+  const vnDateMatch = normalized.match(/^(\d{2})\/(\d{2})\/(\d{4})$/)
+  if (!vnDateMatch) {
+    return ''
+  }
+
+  const [, day, month, year] = vnDateMatch
+  return `${year}-${month}-${day}`
+}
+
+function normalizeTimeText(value) {
+  const raw = String(value || '').trim()
+  if (!raw) return ''
+
+  const extracted = raw.split(/[T\s]/).pop() || raw
+  const match = extracted.match(/^(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?$/)
+  if (!match) {
+    return ''
+  }
+
+  const hour = Number(match[1])
+  const minute = Number(match[2])
+  const second = Number(match[3] || 0)
+  if (
+    Number.isNaN(hour)
+    || Number.isNaN(minute)
+    || Number.isNaN(second)
+    || hour < 0
+    || hour > 23
+    || minute < 0
+    || minute > 59
+    || second < 0
+    || second > 59
+  ) {
+    return ''
+  }
+
+  const pad = item => String(item).padStart(2, '0')
+  return `${pad(hour)}:${pad(minute)}:${pad(second)}`
+}
+
+function normalizeAttendanceType(value) {
+  return String(value || '').trim().toUpperCase() === 'OUT' ? 'OUT' : 'IN'
+}
+
+function buildAttendanceEventKey(employeeId, dateText, timeText, attendanceType) {
+  const employee = normalizeEmployeeId(employeeId)
+  const dateValue = normalizeDateText(dateText)
+  const timeValue = normalizeTimeText(timeText)
+  const typeValue = normalizeAttendanceType(attendanceType)
+
+  if (!employee || !dateValue || !timeValue) {
+    return ''
+  }
+
+  return `${employee}|${dateValue}|${timeValue}|${typeValue}`
+}
+
+function resolveRowKey(record, index) {
+  if (record?.attendance_id != null) {
+    return String(record.attendance_id)
+  }
+  return `${record?.employee_id || 'row'}-${record?.date || ''}-${record?.check_in_time || ''}-${index}`
+}
+
+function buildPushStatus(expectedTypes, matchedTypes) {
+  const expected = Array.from(new Set(expectedTypes))
+  const matched = new Set(matchedTypes)
+
+  if (expected.length === 0) {
+    return {
+      key: 'no_data',
+      label: 'Không có dữ liệu',
+      missingTypes: [],
+    }
+  }
+
+  const missingTypes = expected.filter(type => !matched.has(type))
+  if (missingTypes.length === 0) {
+    return {
+      key: 'synced',
+      label: expected.length > 1 ? 'Đã đẩy đủ' : 'Đã đẩy',
+      missingTypes: [],
+    }
+  }
+
+  if (missingTypes.length === expected.length) {
+    return {
+      key: 'missing',
+      label: 'Chưa đẩy',
+      missingTypes,
+    }
+  }
+
+  return {
+    key: 'partial',
+    label: `Đẩy thiếu (${missingTypes.join(', ')})`,
+    missingTypes,
+  }
 }
 
 function SystemLoginModal({
@@ -86,7 +215,7 @@ function SystemLoginModal({
 
         <form onSubmit={onSubmit} className="p-5 space-y-4">
           <p className="text-sm text-slate-600">
-            Để đẩy dữ liệu chấm công lên hệ thống, vui lòng đăng nhập chế độ system.
+            Để tiếp tục thao tác với ERP, vui lòng đăng nhập chế độ system.
           </p>
 
           {error && (
@@ -151,7 +280,11 @@ export default function Report() {
   const [loading, setLoading] = useState(false)
   const [exporting, setExporting] = useState(false)
   const [pushing, setPushing] = useState(false)
+  const [checkingData, setCheckingData] = useState(false)
   const [authMode, setAuthMode] = useState('system')
+  const [pushStatusByRow, setPushStatusByRow] = useState({})
+  const [checkSummary, setCheckSummary] = useState(null)
+  const [pendingSystemAction, setPendingSystemAction] = useState(null)
 
   const [showSystemLoginModal, setShowSystemLoginModal] = useState(false)
   const [systemLoginLoading, setSystemLoginLoading] = useState(false)
@@ -175,6 +308,16 @@ export default function Report() {
 
   const isInternalMode = authMode === 'internal'
 
+  function resetPushStatusView() {
+    setPushStatusByRow({})
+    setCheckSummary(null)
+  }
+
+  function getRowPushStatus(record, index) {
+    const rowKey = resolveRowKey(record, index)
+    return pushStatusByRow[rowKey] || DEFAULT_PUSH_STATUS
+  }
+
   async function loadAuthMode() {
     try {
       const res = await api.sessionStatus()
@@ -194,6 +337,7 @@ export default function Report() {
         setRecords(res.records || [])
         setSummary(res.summary || { total_records: 0, unique_employees: 0 })
         setFilterDescription(res.filters?.description || '')
+        resetPushStatusView()
       } else {
         toast.error(res.message || 'Không tải được báo cáo')
       }
@@ -247,13 +391,155 @@ export default function Report() {
     }
   }
 
+  async function collectOnlineEventKeys(reportRows) {
+    const employeeIds = Array.from(
+      new Set(reportRows.map(row => normalizeEmployeeId(row.employee_id)).filter(Boolean)),
+    )
+
+    const onlineEventKeys = new Set()
+    for (const employeeId of employeeIds) {
+      let pageCursor = 1
+      let totalPagesRemote = 1
+      let guard = 0
+
+      do {
+        guard += 1
+        const res = await api.getOnlineAttendance({
+          start_date: filters.startDate,
+          end_date: filters.endDate,
+          employee_id: employeeId,
+          sort_by: 'date',
+          sort_dir: 'desc',
+          page: pageCursor,
+          page_size: 500,
+        })
+
+        if (!res?.success) {
+          throw new Error(res?.message || `Không tải được dữ liệu online của nhân viên ${employeeId}`)
+        }
+
+        const onlineRows = Array.isArray(res.records) ? res.records : []
+        for (const row of onlineRows) {
+          const eventKey = buildAttendanceEventKey(
+            row?.employee_id,
+            row?.attendance_date,
+            row?.attendance_time,
+            row?.attendance_type,
+          )
+          if (eventKey) {
+            onlineEventKeys.add(eventKey)
+          }
+        }
+
+        const parsedTotalPages = Number(res?.meta?.total_pages || 1)
+        totalPagesRemote = Number.isFinite(parsedTotalPages) && parsedTotalPages > 0
+          ? parsedTotalPages
+          : 1
+
+        pageCursor += 1
+      } while (pageCursor <= totalPagesRemote && guard <= 100)
+    }
+
+    return onlineEventKeys
+  }
+
+  function buildPushStatusMap(reportRows, onlineEventKeys) {
+    const statusByRow = {}
+    const resultSummary = {
+      totalRows: reportRows.length,
+      syncedRows: 0,
+      partialRows: 0,
+      missingRows: 0,
+      noDataRows: 0,
+    }
+
+    reportRows.forEach((record, index) => {
+      const employeeId = normalizeEmployeeId(record.employee_id)
+      const dateText = normalizeDateText(record.date || record.date_display)
+
+      const expectedEvents = []
+      const checkInEventKey = buildAttendanceEventKey(employeeId, dateText, record.check_in_time, 'IN')
+      if (checkInEventKey) {
+        expectedEvents.push({ type: 'IN', key: checkInEventKey })
+      }
+
+      const checkOutEventKey = buildAttendanceEventKey(employeeId, dateText, record.check_out_time, 'OUT')
+      if (checkOutEventKey) {
+        expectedEvents.push({ type: 'OUT', key: checkOutEventKey })
+      }
+
+      const expectedTypes = expectedEvents.map(item => item.type)
+      const matchedTypes = expectedEvents
+        .filter(item => onlineEventKeys.has(item.key))
+        .map(item => item.type)
+
+      const pushStatus = buildPushStatus(expectedTypes, matchedTypes)
+      statusByRow[resolveRowKey(record, index)] = pushStatus
+
+      if (pushStatus.key === 'synced') resultSummary.syncedRows += 1
+      if (pushStatus.key === 'partial') resultSummary.partialRows += 1
+      if (pushStatus.key === 'missing') resultSummary.missingRows += 1
+      if (pushStatus.key === 'no_data') resultSummary.noDataRows += 1
+    })
+
+    return {
+      statusByRow,
+      resultSummary,
+    }
+  }
+
+  async function checkPushStatusData() {
+    if (records.length === 0) {
+      toast.error('Không có dữ liệu báo cáo để kiểm tra')
+      return
+    }
+
+    setCheckingData(true)
+    try {
+      const onlineEventKeys = await collectOnlineEventKeys(records)
+      const { statusByRow, resultSummary } = buildPushStatusMap(records, onlineEventKeys)
+      setPushStatusByRow(statusByRow)
+      setCheckSummary({
+        ...resultSummary,
+        checkedAt: new Date().toLocaleString('vi-VN'),
+      })
+
+      const unresolvedRowsCount = resultSummary.partialRows + resultSummary.missingRows
+      if (unresolvedRowsCount > 0) {
+        toast.error(`Đã kiểm tra ${resultSummary.totalRows} dòng. Còn ${unresolvedRowsCount} dòng chưa đẩy đủ.`)
+      } else {
+        toast.success(`Đã kiểm tra ${resultSummary.totalRows} dòng. Dữ liệu đã đẩy đầy đủ.`)
+      }
+    } catch (error) {
+      console.error(error)
+      toast.error(error?.message || 'Không kiểm tra được trạng thái đẩy ERP')
+    } finally {
+      setCheckingData(false)
+    }
+  }
+
   async function handlePushButtonClick() {
     if (isInternalMode) {
+      setPendingSystemAction('push')
       setSystemLoginError('')
       setShowSystemLoginModal(true)
       return
     }
+
+    setPendingSystemAction(null)
     await pushOfflineToOnline()
+  }
+
+  async function handleCheckDataButtonClick() {
+    if (isInternalMode) {
+      setPendingSystemAction('check')
+      setSystemLoginError('')
+      setShowSystemLoginModal(true)
+      return
+    }
+
+    setPendingSystemAction(null)
+    await checkPushStatusData()
   }
 
   async function handleSystemLoginSubmit(event) {
@@ -268,17 +554,28 @@ export default function Report() {
         return
       }
 
+      const nextAction = pendingSystemAction
+
       setSessionToken(res.token)
       setAuthMode('system')
       setShowSystemLoginModal(false)
+      setPendingSystemAction(null)
       toast.success('Đăng nhập hệ thống thành công')
-      await pushOfflineToOnline()
+      if (nextAction === 'check') {
+        await checkPushStatusData()
+      } else {
+        await pushOfflineToOnline()
+      }
     } catch {
       setSystemLoginError('Không thể đăng nhập hệ thống')
     } finally {
       setSystemLoginLoading(false)
     }
   }
+
+  const unresolvedRows = checkSummary
+    ? (checkSummary.partialRows + checkSummary.missingRows)
+    : 0
 
   return (
     <div className="space-y-4 md:space-y-6">
@@ -291,6 +588,7 @@ export default function Report() {
         onClose={() => {
           if (!systemLoginLoading) {
             setShowSystemLoginModal(false)
+            setPendingSystemAction(null)
           }
         }}
         onSubmit={handleSystemLoginSubmit}
@@ -303,7 +601,7 @@ export default function Report() {
         </p>
         {isInternalMode && (
           <p className="text-sm text-amber-700 mt-1">
-            Đang ở chế độ nội bộ. Khi đẩy dữ liệu, hệ thống sẽ yêu cầu đăng nhập system.
+            Đang ở chế độ nội bộ. Khi kiểm tra data hoặc đẩy dữ liệu, hệ thống sẽ yêu cầu đăng nhập system.
           </p>
         )}
       </div>
@@ -412,44 +710,44 @@ export default function Report() {
         </div>
 
         <div className="flex flex-wrap gap-2">
-          <button
-            onClick={handleApplyFilters}
-            disabled={loading}
-            className="w-full sm:w-auto flex items-center justify-center gap-2 px-4 py-2.5 bg-primary-600 text-white rounded-xl text-sm font-semibold hover:bg-primary-700 disabled:opacity-50 transition-colors"
+          <ReportActionButton to={ROUTES.onlineAttendanceCheck}>
+            Kiểm tra dữ liệu chấm công online
+          </ReportActionButton>
+
+          <ReportActionButton
+            onClick={handleCheckDataButtonClick}
+            disabled={checkingData || loading || records.length === 0}
+            icon={Search}
           >
-            <Search size={16} />
+            {checkingData ? 'Đang kiểm tra...' : 'Kiểm tra data'}
+          </ReportActionButton>
+
+          <ReportActionButton onClick={handleApplyFilters} disabled={loading} icon={Search}>
             {loading ? 'Đang tải...' : 'Xem báo cáo'}
-          </button>
+          </ReportActionButton>
 
-          <button
-            onClick={handleResetFilters}
-            disabled={loading}
-            className="w-full sm:w-auto flex items-center justify-center gap-2 px-4 py-2.5 bg-slate-100 text-slate-700 rounded-xl text-sm font-semibold hover:bg-slate-200 disabled:opacity-50 transition-colors"
-          >
-            <RefreshCw size={16} />
+          <ReportActionButton onClick={handleResetFilters} disabled={loading} icon={RefreshCw}>
             Đặt lại bộ lọc
-          </button>
+          </ReportActionButton>
 
-          <button
+          <ReportActionButton
             onClick={handleExportExcel}
             disabled={exporting || loading || records.length === 0}
-            className="w-full sm:w-auto flex items-center justify-center gap-2 px-4 py-2.5 bg-emerald-600 text-white rounded-xl text-sm font-semibold hover:bg-emerald-700 disabled:opacity-50 transition-colors"
+            icon={Download}
           >
-            <Download size={16} />
             {exporting ? 'Đang xuất...' : 'Xuất Excel'}
-          </button>
+          </ReportActionButton>
 
-          <button
+          <ReportActionButton
             onClick={handlePushButtonClick}
             disabled={pushing || loading || records.length === 0}
-            className="w-full sm:w-auto flex items-center justify-center gap-2 px-4 py-2.5 bg-sky-600 text-white rounded-xl text-sm font-semibold hover:bg-sky-700 disabled:opacity-50 transition-colors"
+            icon={UploadCloud}
           >
-            <UploadCloud size={16} />
             {pushing ? 'Đang đẩy...' : 'Đẩy dữ liệu offline -> online'}
-          </button>
+          </ReportActionButton>
         </div>
 
-        <div className="grid sm:grid-cols-3 gap-3">
+        <div className="grid sm:grid-cols-2 xl:grid-cols-4 gap-3">
           <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
             <p className="text-xs uppercase tracking-wide text-slate-500">Tổng bản ghi</p>
             <p className="mt-1 text-2xl font-bold text-slate-800">{summary.total_records || 0}</p>
@@ -462,6 +760,22 @@ export default function Report() {
             <p className="text-xs uppercase tracking-wide text-slate-500">Bộ lọc hiện tại</p>
             <p className="mt-1 text-sm text-slate-700 leading-6">{filterDescription || 'Chưa có mô tả bộ lọc'}</p>
           </div>
+          <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+            <p className="text-xs uppercase tracking-wide text-slate-500">Trạng thái đẩy</p>
+            {checkSummary ? (
+              <div className="mt-1 space-y-1">
+                <p className="text-sm font-semibold text-slate-800">
+                  Đã đẩy đủ: {checkSummary.syncedRows}/{checkSummary.totalRows}
+                </p>
+                <p className="text-xs text-slate-600">
+                  Chưa đẩy đủ: {unresolvedRows} (thiếu: {checkSummary.partialRows}, chưa đẩy: {checkSummary.missingRows})
+                </p>
+                <p className="text-xs text-slate-500">Lần kiểm tra: {checkSummary.checkedAt}</p>
+              </div>
+            ) : (
+              <p className="mt-1 text-sm text-slate-700 leading-6">Chưa kiểm tra data ERP.</p>
+            )}
+          </div>
         </div>
       </div>
 
@@ -471,7 +785,7 @@ export default function Report() {
         ) : (
           <div>
             <div className="hidden xl:block overflow-x-auto">
-              <table className="w-full text-sm min-w-[1360px]">
+              <table className="w-full text-sm min-w-[1480px]">
                 <thead className="bg-slate-50">
                   <tr>
                     <th className="px-4 py-3 text-left font-medium text-slate-600">#</th>
@@ -484,60 +798,77 @@ export default function Report() {
                     <th className="px-4 py-3 text-left font-medium text-slate-600">Vị trí checkin</th>
                     <th className="px-4 py-3 text-left font-medium text-slate-600">Vị trí checkout</th>
                     <th className="px-4 py-3 text-left font-medium text-slate-600">Trạng thái</th>
+                    <th className="px-4 py-3 text-left font-medium text-slate-600">Trạng thái đẩy</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-50">
-                  {paginatedRecords.map((record, index) => (
-                    <tr key={`${record.attendance_id}-${index}`} className="hover:bg-slate-50">
-                      <td className="px-4 py-3 text-slate-400">{(page - 1) * pageSize + index + 1}</td>
-                      <td className="px-4 py-3 text-slate-600">{record.date_display || record.date || '-'}</td>
-                      <td className="px-4 py-3 font-medium text-slate-800">{record.name || '-'}</td>
-                      <td className="px-4 py-3 text-slate-600">{record.employee_id || '-'}</td>
-                      <td className="px-4 py-3 text-slate-600">{record.department || '-'}</td>
-                      <td className="px-4 py-3 text-slate-600">{record.check_in_time || '-'}</td>
-                      <td className="px-4 py-3 text-slate-600">{record.check_out_time || '-'}</td>
-                      <td className="px-4 py-3 text-slate-600 max-w-[260px] whitespace-normal break-words">
-                        {describeLocationText(record.check_in_location)}
-                      </td>
-                      <td className="px-4 py-3 text-slate-600 max-w-[260px] whitespace-normal break-words">
-                        {describeLocationText(record.check_out_location)}
-                      </td>
-                      <td className="px-4 py-3">
-                        <span className={`inline-flex px-2.5 py-1 rounded-full text-xs font-medium border ${getStatusTone(record.status_key)}`}>
-                          {record.status || '-'}
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
+                  {paginatedRecords.map((record, index) => {
+                    const pushStatus = getRowPushStatus(record, index)
+                    return (
+                      <tr key={`${record.attendance_id}-${index}`} className="hover:bg-slate-50">
+                        <td className="px-4 py-3 text-slate-400">{(page - 1) * pageSize + index + 1}</td>
+                        <td className="px-4 py-3 text-slate-600">{record.date_display || record.date || '-'}</td>
+                        <td className="px-4 py-3 font-medium text-slate-800">{record.name || '-'}</td>
+                        <td className="px-4 py-3 text-slate-600">{record.employee_id || '-'}</td>
+                        <td className="px-4 py-3 text-slate-600">{record.department || '-'}</td>
+                        <td className="px-4 py-3 text-slate-600">{record.check_in_time || '-'}</td>
+                        <td className="px-4 py-3 text-slate-600">{record.check_out_time || '-'}</td>
+                        <td className="px-4 py-3 text-slate-600 max-w-[260px] whitespace-normal break-words">
+                          {describeLocationText(record.check_in_location)}
+                        </td>
+                        <td className="px-4 py-3 text-slate-600 max-w-[260px] whitespace-normal break-words">
+                          {describeLocationText(record.check_out_location)}
+                        </td>
+                        <td className="px-4 py-3">
+                          <span className={`inline-flex px-2.5 py-1 rounded-full text-xs font-medium border ${getStatusTone(record.status_key)}`}>
+                            {record.status || '-'}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3">
+                          <span className={`inline-flex px-2.5 py-1 rounded-full text-xs font-medium border ${getPushStatusTone(pushStatus.key)}`}>
+                            {pushStatus.label}
+                          </span>
+                        </td>
+                      </tr>
+                    )
+                  })}
                 </tbody>
               </table>
             </div>
 
             <div className="xl:hidden divide-y divide-slate-100">
-              {paginatedRecords.map((record, index) => (
-                <div key={`${record.attendance_id}-${index}`} className="px-4 py-4 sm:px-5">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <p className="font-semibold text-slate-800 truncate">{record.name || '-'}</p>
-                      <p className="text-xs text-slate-500 mt-0.5">
-                        {(record.date_display || record.date || '-')}{' '}
-                        | {record.employee_id || '-'} | {record.department || '-'}
-                      </p>
-                      <p className="text-xs text-slate-400 mt-1">STT {(page - 1) * pageSize + index + 1}</p>
+              {paginatedRecords.map((record, index) => {
+                const pushStatus = getRowPushStatus(record, index)
+                return (
+                  <div key={`${record.attendance_id}-${index}`} className="px-4 py-4 sm:px-5">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="font-semibold text-slate-800 truncate">{record.name || '-'}</p>
+                        <p className="text-xs text-slate-500 mt-0.5">
+                          {(record.date_display || record.date || '-')}{' '}
+                          | {record.employee_id || '-'} | {record.department || '-'}
+                        </p>
+                        <p className="text-xs text-slate-400 mt-1">STT {(page - 1) * pageSize + index + 1}</p>
+                      </div>
+                      <div className="shrink-0 flex flex-col items-end gap-1">
+                        <span className={`inline-flex px-2 py-1 text-[11px] rounded-full font-medium border ${getStatusTone(record.status_key)}`}>
+                          {record.status || '-'}
+                        </span>
+                        <span className={`inline-flex px-2 py-1 text-[11px] rounded-full font-medium border ${getPushStatusTone(pushStatus.key)}`}>
+                          {pushStatus.label}
+                        </span>
+                      </div>
                     </div>
-                    <span className={`shrink-0 inline-flex px-2 py-1 text-[11px] rounded-full font-medium border ${getStatusTone(record.status_key)}`}>
-                      {record.status || '-'}
-                    </span>
-                  </div>
 
-                  <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-slate-600">
-                    <p>Giờ vào: {record.check_in_time || '-'}</p>
-                    <p>Giờ ra: {record.check_out_time || '-'}</p>
-                    <p className="col-span-2">Checkin: {describeLocationText(record.check_in_location)}</p>
-                    <p className="col-span-2">Checkout: {describeLocationText(record.check_out_location)}</p>
+                    <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-slate-600">
+                      <p>Giờ vào: {record.check_in_time || '-'}</p>
+                      <p>Giờ ra: {record.check_out_time || '-'}</p>
+                      <p className="col-span-2">Checkin: {describeLocationText(record.check_in_location)}</p>
+                      <p className="col-span-2">Checkout: {describeLocationText(record.check_out_location)}</p>
+                    </div>
                   </div>
-                </div>
-              ))}
+                )
+              })}
             </div>
 
             {records.length > 0 && (

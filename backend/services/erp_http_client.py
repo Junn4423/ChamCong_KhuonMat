@@ -9,6 +9,7 @@ import base64
 import secrets
 import string
 import uuid
+from datetime import datetime
 from urllib import parse, request
 from urllib.error import HTTPError, URLError
 from urllib.parse import urljoin, urlparse
@@ -216,8 +217,30 @@ class ERPHttpClient:
             'get_employee': True,
             'get_employee_image': True,
             'upload_employee_image': True,
-            'attendance_http_api': False,
+            'attendance_http_api': True,
         }
+
+    @staticmethod
+    def _normalize_attendance_datetime(value):
+        if value is None:
+            return datetime.now()
+        if isinstance(value, datetime):
+            return value
+        if isinstance(value, str):
+            text = value.strip()
+            if not text:
+                return datetime.now()
+            for date_format in (
+                '%Y-%m-%d %H:%M:%S',
+                '%Y-%m-%d %H:%M',
+                '%Y-%m-%dT%H:%M:%S',
+                '%Y-%m-%dT%H:%M',
+            ):
+                try:
+                    return datetime.strptime(text, date_format)
+                except ValueError:
+                    continue
+        raise ERPServiceError('Thoi gian cham cong khong hop le', status_code=400)
 
     def login(self, username, password, client_ip='', client_mac=''):
         username = (username or '').strip()
@@ -823,6 +846,211 @@ class ERPHttpClient:
                 raise ERPServiceError(response.get('message') or 'ERP tu choi luu anh', payload=response)
 
         return response
+
+    def push_attendance_record(
+        self,
+        employee_id,
+        attendance_time=None,
+        attendance_code='IN',
+        source='',
+        camera_ip='',
+        auth=None,
+    ):
+        employee_id = (employee_id or '').strip()
+        if not employee_id:
+            raise ERPServiceError('Thieu ma nhan vien', status_code=400)
+
+        attendance_dt = self._normalize_attendance_datetime(attendance_time)
+        attendance_type = str(attendance_code or 'IN').strip().upper()
+        if attendance_type not in {'IN', 'OUT'}:
+            attendance_type = 'IN'
+
+        payload = {
+            'table': 'chamcong_ngocchung',
+            'func': 'pushAttendance',
+            'employee_id': employee_id,
+            'attendance_date': attendance_dt.strftime('%Y-%m-%d'),
+            'attendance_time': attendance_dt.strftime('%H:%M:%S'),
+            'attendance_type': attendance_type,
+            'source': (source or '').strip() or 'Camera',
+            'camera_ip': (camera_ip or '').strip(),
+        }
+
+        response = self._post_json(
+            self._resolve_service_url(auth or {}),
+            payload,
+            headers=self._build_service_headers(auth or {}),
+        )
+
+        if self._is_invalid_session_response(response):
+            raise ERPServiceError('Phien lam viec ERP da het han, vui long dang nhap lai', status_code=401, payload=response)
+        if not isinstance(response, dict):
+            raise ERPServiceError('ERP service pushAttendance tra ve du lieu khong hop le', status_code=502)
+
+        ok = bool(response.get('success'))
+        status_text = str(response.get('status') or '').strip().lower()
+        if (not ok) or status_text in {'error', 'failed', 'fail'}:
+            raise ERPServiceError(
+                str(response.get('message') or response.get('error') or 'ERP service tu choi ghi cham cong').strip(),
+                status_code=502,
+                payload=response,
+            )
+
+        verify_payload = response.get('verify') if isinstance(response.get('verify'), dict) else {}
+        verify_inserted = verify_payload.get('inserted')
+        verify_matched_rows = int(verify_payload.get('matched_rows') or 0)
+        if verify_inserted is False:
+            raise ERPServiceError('ERP service bao ghi cham cong khong thanh cong', status_code=502, payload=response)
+        if verify_payload and verify_matched_rows <= 0:
+            raise ERPServiceError('ERP service khong xac thuc du lieu sau ghi', status_code=502, payload=response)
+
+        return response
+
+    def check_recent_attendance(self, employee_id, minutes=10, auth=None):
+        employee_id = (employee_id or '').strip()
+        if not employee_id:
+            raise ERPServiceError('Thieu ma nhan vien', status_code=400)
+
+        try:
+            normalized_minutes = int(minutes)
+        except (TypeError, ValueError):
+            normalized_minutes = 10
+        if normalized_minutes < 1:
+            normalized_minutes = 1
+        if normalized_minutes > 1440:
+            normalized_minutes = 1440
+
+        payload = {
+            'table': 'chamcong_ngocchung',
+            'func': 'checkRecentAttendance',
+            'employee_id': employee_id,
+            'minutes': normalized_minutes,
+        }
+
+        response = self._post_json(
+            self._resolve_service_url(auth or {}),
+            payload,
+            headers=self._build_service_headers(auth or {}),
+        )
+
+        if self._is_invalid_session_response(response):
+            raise ERPServiceError('Phien lam viec ERP da het han, vui long dang nhap lai', status_code=401, payload=response)
+        if not isinstance(response, dict):
+            raise ERPServiceError('ERP service checkRecentAttendance tra ve du lieu khong hop le', status_code=502)
+
+        ok = bool(response.get('success'))
+        status_text = str(response.get('status') or '').strip().lower()
+        if (not ok) or status_text in {'error', 'failed', 'fail'}:
+            raise ERPServiceError(
+                str(response.get('message') or response.get('error') or 'Khong the kiem tra cham cong gan day').strip(),
+                status_code=502,
+                payload=response,
+            )
+
+        count = int(response.get('count') or 0)
+        exists = response.get('exists')
+        if isinstance(exists, bool):
+            return exists
+        return count > 0
+
+    def get_online_attendance(self, filters=None, auth=None):
+        filters = filters if isinstance(filters, dict) else {}
+
+        today = datetime.now().strftime('%Y-%m-%d')
+        start_date = str(filters.get('start_date') or '').strip() or today
+        end_date = str(filters.get('end_date') or '').strip() or today
+        employee_id = str(filters.get('employee_id') or '').strip()
+        keyword = str(filters.get('keyword') or '').strip()
+
+        attendance_type = str(filters.get('attendance_type') or '').strip().upper()
+        if attendance_type not in {'IN', 'OUT'}:
+            attendance_type = 'all'
+
+        sort_by_raw = str(filters.get('sort_by') or '').strip().lower()
+        sort_by_map = {
+            'date': 'date',
+            'attendance_date': 'date',
+            'time': 'time',
+            'attendance_time': 'time',
+            'employee_id': 'employee_id',
+            'attendance_type': 'attendance_type',
+            'status': 'attendance_type',
+            'source': 'source',
+            'camera_ip': 'camera_ip',
+        }
+        sort_by = sort_by_map.get(sort_by_raw, 'date')
+
+        sort_dir = str(filters.get('sort_dir') or '').strip().lower()
+        sort_dir = 'asc' if sort_dir == 'asc' else 'desc'
+
+        try:
+            page = int(filters.get('page') or 1)
+        except (TypeError, ValueError):
+            page = 1
+        try:
+            page_size = int(filters.get('page_size') or 50)
+        except (TypeError, ValueError):
+            page_size = 50
+        page = max(1, page)
+        page_size = min(500, max(1, page_size))
+
+        payload = {
+            'table': 'chamcong_ngocchung',
+            'func': 'getOnlineAttendance',
+            'start_date': start_date,
+            'end_date': end_date,
+            'attendance_type': attendance_type,
+            'sort_by': sort_by,
+            'sort_dir': sort_dir,
+            'page': page,
+            'page_size': page_size,
+        }
+        if employee_id:
+            payload['employee_id'] = employee_id
+        if keyword:
+            payload['keyword'] = keyword
+
+        response = self._post_json(
+            self._resolve_service_url(auth or {}),
+            payload,
+            headers=self._build_service_headers(auth or {}),
+        )
+
+        if self._is_invalid_session_response(response):
+            raise ERPServiceError('Phien lam viec ERP da het han, vui long dang nhap lai', status_code=401, payload=response)
+        if not isinstance(response, dict):
+            raise ERPServiceError('ERP service getOnlineAttendance tra ve du lieu khong hop le', status_code=502)
+
+        ok = bool(response.get('success'))
+        status_text = str(response.get('status') or '').strip().lower()
+        if (not ok) or status_text in {'error', 'failed', 'fail'}:
+            raise ERPServiceError(
+                str(response.get('message') or response.get('error') or 'Khong the tai du lieu cham cong online').strip(),
+                status_code=502,
+                payload=response,
+            )
+
+        records = response.get('records')
+        if not isinstance(records, list):
+            records = response.get('data') if isinstance(response.get('data'), list) else []
+
+        meta = response.get('meta') if isinstance(response.get('meta'), dict) else {}
+        if not meta:
+            total = len(records)
+            total_pages = int((total + page_size - 1) / page_size) if page_size else 1
+            meta = {
+                'page': page,
+                'page_size': page_size,
+                'total': total,
+                'total_pages': max(1, total_pages),
+            }
+
+        return {
+            'records': records,
+            'meta': meta,
+            'filters': response.get('filters') if isinstance(response.get('filters'), dict) else {},
+            'raw': response,
+        }
 
     def create_sof_image_token(self, image_bytes, username=None, auth=None):
         if not image_bytes:

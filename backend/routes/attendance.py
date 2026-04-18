@@ -10,7 +10,7 @@ from datetime import datetime, date
 import cv2
 import numpy as np
 from PIL import Image as PILImage
-from flask import Blueprint, request, jsonify, send_file
+from flask import Blueprint, request, jsonify, send_file, g
 
 from backend.models.database import db, User, Attendance, EmployeeImage
 from backend.models.erp_integration import erp_attendance
@@ -59,7 +59,7 @@ def _location_source(attendance_type, has_request_location):
     return f'{attendance_type}_{suffix}'
 
 
-def _apply_attendance_action(user, attendance_type='checkin', request_location=None, attendance_code=None):
+def _apply_attendance_action(user, attendance_type='checkin', request_location=None, attendance_code=None, erp_auth=None):
     attendance_type = _normalize_attendance_type(attendance_type)
     today_val = date.today()
     current_time = datetime.now()
@@ -96,6 +96,7 @@ def _apply_attendance_action(user, attendance_type='checkin', request_location=N
             employee_id=user.employee_id,
             attendance_time=current_time,
             attendance_code=_erp_attendance_code('checkout', attendance_code),
+            auth=erp_auth,
         )
 
         message = f'Checkout thành công cho {user.name}'
@@ -137,7 +138,7 @@ def _apply_attendance_action(user, attendance_type='checkin', request_location=N
                 'message': 'Chỉ được chấm công 1 lần mỗi 10 phút',
             }
 
-    if erp_attendance.check_recent_attendance(user.employee_id, minutes=10):
+    if erp_attendance.check_recent_attendance(user.employee_id, minutes=10, auth=erp_auth):
         return {
             'ok': False,
             'status_code': 400,
@@ -173,6 +174,7 @@ def _apply_attendance_action(user, attendance_type='checkin', request_location=N
         employee_id=user.employee_id,
         attendance_time=current_time,
         attendance_code=_erp_attendance_code('checkin', attendance_code),
+        auth=erp_auth,
     )
 
     message = f'Checkin thành công cho {user.name}'
@@ -208,6 +210,7 @@ def check_attendance():
             user=user,
             attendance_type=attendance_type,
             request_location=request_location,
+            erp_auth=getattr(g, 'erp_auth', None),
         )
         if not action_result.get('ok'):
             return jsonify({
@@ -389,6 +392,7 @@ def attendance_image():
             attendance_type=attendance_type,
             request_location=request_location,
             attendance_code=attendance_code,
+            erp_auth=getattr(g, 'erp_auth', None),
         )
         if not action_result.get('ok'):
             return jsonify({
@@ -804,6 +808,7 @@ def api_report_push_to_erp():
 
     pushed = 0
     failed_ids = []
+    failed_details = []
     total_events = 0
     for row in rows:
         att = row.get('_attendance')
@@ -826,11 +831,19 @@ def api_report_push_to_erp():
                 employee_id=user.employee_id,
                 attendance_time=event_time,
                 attendance_code=event_code,
+                auth=getattr(g, 'erp_auth', None),
             )
             if ok:
                 pushed += 1
             else:
-                failed_ids.append(f"{user.employee_id}:{event_code}")
+                row_key = f"{user.employee_id}:{event_code}"
+                failed_ids.append(row_key)
+                failed_details.append({
+                    'employee_id': user.employee_id,
+                    'attendance_type': event_code,
+                    'attendance_time': event_time.strftime('%Y-%m-%d %H:%M:%S'),
+                    'error': erp_attendance.last_error_message or 'ERP tu choi ghi cham cong',
+                })
 
     failed = len(failed_ids)
     total = total_events
@@ -848,6 +861,7 @@ def api_report_push_to_erp():
             'pushed': pushed,
             'failed': failed,
             'failed_employee_ids': failed_ids,
+            'failed_details': failed_details,
             'records': summary.get('total_records', 0),
         },
     })
@@ -901,6 +915,7 @@ def api_report_push_to_erp():
                 employee_id=user.employee_id,
                 attendance_time=event_time,
                 attendance_code=event_code,
+                auth=getattr(g, 'erp_auth', None),
             )
             if ok:
                 pushed += 1
@@ -925,3 +940,50 @@ def api_report_push_to_erp():
             'failed_employee_ids': failed_ids,
         },
     })
+
+
+@attendance_bp.route('/api/report/online_attendance')
+@admin_required
+def api_report_online_attendance():
+    if resolve_request_auth_mode(default='internal') != 'system':
+        return jsonify({
+            'success': False,
+            'message': 'Đang ở chế độ nội bộ. Vui lòng đăng nhập hệ thống để kiểm tra dữ liệu online.',
+        }), 403
+
+    filters = request.args.to_dict(flat=True)
+    try:
+        result = erp_attendance.list_online_attendance(
+            filters=filters,
+            auth=getattr(g, 'erp_auth', None),
+        )
+        records = result.get('records') or []
+        meta = result.get('meta') or {}
+        resolved_filters = result.get('filters') or {}
+
+        if erp_attendance.last_error_message and not records:
+            return jsonify({
+                'success': False,
+                'message': erp_attendance.last_error_message,
+                'records': [],
+                'meta': meta,
+                'filters': resolved_filters,
+            }), 502
+
+        return jsonify({
+            'success': True,
+            'message': 'Đã tải dữ liệu chấm công online',
+            'records': records,
+            'meta': meta,
+            'filters': resolved_filters,
+        })
+    except Exception as exc:
+        status_code = int(getattr(exc, 'status_code', 0) or 500)
+        message = str(getattr(exc, 'message', '') or str(exc) or 'Khong the tai du lieu cham cong online')
+        return jsonify({
+            'success': False,
+            'message': message,
+            'records': [],
+            'meta': {},
+            'filters': filters,
+        }), status_code

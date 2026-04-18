@@ -8,6 +8,7 @@ import Cameras from './pages/Cameras'
 import Register from './pages/Register'
 import ManageFaces from './pages/ManageFaces'
 import Report from './pages/Report'
+import OnlineAttendanceCheck from './pages/OnlineAttendanceCheck'
 import SyncVerify from './pages/SyncVerify'
 import Login from './pages/Login'
 import SystemSettings from './pages/SystemSettings'
@@ -94,6 +95,14 @@ export default function App() {
               element={(
                 <ModuleGate moduleKey={MODULE_TOGGLE_KEYS.report}>
                   <Report />
+                </ModuleGate>
+              )}
+            />
+            <Route
+              path={ROUTES.onlineAttendanceCheck}
+              element={(
+                <ModuleGate moduleKey={MODULE_TOGGLE_KEYS.onlineAttendanceCheck}>
+                  <OnlineAttendanceCheck />
                 </ModuleGate>
               )}
             />
