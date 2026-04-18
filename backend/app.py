@@ -275,6 +275,21 @@ def create_app():
         @app.errorhandler(404)
         def fallback(e):
             return send_from_directory(_dist_dir, 'index.html')
+    else:
+        @app.route('/')
+        def backend_root_info():
+            return jsonify({
+                'service': 'FaceCheck API',
+                'status': 'running',
+                'frontend_dist_exists': False,
+                'health': '/api/health',
+                'debug_paths': '/api/debug_paths',
+                'frontend_dev_hint': 'Run start_web.bat and open http://localhost:5173 for UI',
+            })
+
+        @app.route('/favicon.ico')
+        def backend_favicon_noop():
+            return ('', 204)
 
     return app
 

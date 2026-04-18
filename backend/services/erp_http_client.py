@@ -174,7 +174,33 @@ class ERPHttpClient:
         if not username or not password:
             raise ERPServiceError('Vui long nhap tai khoan va mat khau ERP', status_code=400)
 
-        # Source of truth for credential check: CouchDB lv_lv0066 user document.
+        gateway_response = None
+        gateway_error = None
+        gateway_headers = self._build_gateway_headers()
+        for request_type, attempt_payload in self._build_gateway_login_attempts(username, password):
+            try:
+                if request_type == 'form':
+                    candidate = self._post_form(
+                        self.login_url,
+                        attempt_payload,
+                        headers=gateway_headers,
+                    )
+                else:
+                    candidate = self._post_json(
+                        self.login_url,
+                        attempt_payload,
+                        headers=gateway_headers,
+                    )
+            except ERPServiceError as exc:
+                gateway_error = exc
+                continue
+
+            gateway_response = candidate
+            normalized = self._normalize_gateway_login_response(candidate, requested_username=username)
+            if normalized:
+                return self._merge_login_payload({}, normalized, token_source='gateway')
+
+        # Fallback to direct CouchDB auth when gateway rejects or cannot parse token payload.
         couch_auth = None
         couch_auth_error = None
         try:
@@ -186,67 +212,9 @@ class ERPHttpClient:
             )
         except ERPServiceError as exc:
             couch_auth_error = exc
-            if exc.status_code and exc.status_code < 500:
-                raise
 
-        base_payload = {
-            'txtUserName': username,
-            'txtPassword': password,
-        }
-
-        login_payload = dict(base_payload)
-        if self.device_type:
-            login_payload['txtDeviceType'] = self.device_type
-        if self.type_code:
-            login_payload['txtTypeCode'] = self.type_code
-
-        payload_attempts = [login_payload]
-        if login_payload != base_payload:
-            payload_attempts.append(base_payload)
-
-        response = None
-        last_error = None
-        for attempt_payload in payload_attempts:
-            try:
-                candidate = self._post_json(
-                    self.login_url,
-                    attempt_payload,
-                    headers=self._build_gateway_headers(),
-                )
-            except ERPServiceError as exc:
-                last_error = exc
-                continue
-
-            if isinstance(candidate, dict):
-                candidate_code = (candidate.get('code') or '').strip()
-                candidate_token = (candidate.get('token') or '').strip()
-                if candidate_code and candidate_token:
-                    response = candidate
-                    break
-                response = candidate
-                continue
-
-            response = candidate
-
-        if isinstance(response, dict):
-            code = (response.get('code') or '').strip()
-            token = (response.get('token') or '').strip()
-            if code and token:
-                merged = self._merge_login_payload(couch_auth, response, token_source='gateway')
-                self._sync_couchdb_post_login(
-                    username=username,
-                    auth_payload=merged,
-                    client_ip=client_ip,
-                    client_mac=client_mac,
-                    login_password=password,
-                )
-                if couch_auth_error and not couch_auth:
-                    merged['couchdb_warning'] = couch_auth_error.message
-                return merged
-
-        # Gateway token endpoint may fail by app TypeCode/device policy; keep CouchDB-auth login available.
         if couch_auth:
-            merged = self._merge_login_payload(couch_auth, {}, token_source='couchdb_direct')
+            merged = self._merge_login_payload(couch_auth, gateway_response or {}, token_source='couchdb_direct')
             self._sync_couchdb_post_login(
                 username=username,
                 auth_payload=merged,
@@ -254,23 +222,132 @@ class ERPHttpClient:
                 client_mac=client_mac,
                 login_password=password,
             )
+            if gateway_error:
+                merged['gateway_warning'] = gateway_error.message
             return merged
 
-        if isinstance(response, dict):
+        if isinstance(gateway_response, dict):
             message = (
-                response.get('message')
-                or response.get('error')
-                or response.get('reason')
+                gateway_response.get('message')
+                or gateway_response.get('error')
+                or gateway_response.get('reason')
                 or ''
             )
+            status_text = str(gateway_response.get('status') or '').strip()
+            if not message and status_text:
+                message = f'Dang nhap gateway that bai (status={status_text})'
             if message:
-                raise ERPServiceError(str(message), status_code=401, payload=response)
+                raise ERPServiceError(str(message), status_code=401, payload=gateway_response)
 
-        if last_error:
-            raise last_error
+        if gateway_error:
+            raise gateway_error
         if couch_auth_error:
             raise couch_auth_error
         raise ERPServiceError('Dang nhap that bai', status_code=401)
+
+    def _build_gateway_login_attempts(self, username, password):
+        modern_payload = {
+            'method': 'loginUser',
+            'username': username,
+            'password': password,
+        }
+        if self.device_type:
+            modern_payload['deviceType'] = self.device_type
+        if self.type_code:
+            modern_payload['TYPE-SOF-CODE'] = self.type_code
+
+        modern_base_payload = {
+            'method': 'loginUser',
+            'username': username,
+            'password': password,
+        }
+
+        legacy_payload = {
+            'txtUserName': username,
+            'txtPassword': password,
+        }
+        if self.device_type:
+            legacy_payload['txtDeviceType'] = self.device_type
+        if self.type_code:
+            legacy_payload['txtTypeCode'] = self.type_code
+
+        legacy_base_payload = {
+            'txtUserName': username,
+            'txtPassword': password,
+        }
+
+        attempts = []
+        seen = set()
+        for request_type in ('json', 'form'):
+            for payload in (
+                modern_payload,
+                modern_base_payload,
+                legacy_payload,
+                legacy_base_payload,
+            ):
+                signature = (request_type, json.dumps(payload, sort_keys=True, ensure_ascii=False))
+                if signature in seen:
+                    continue
+                seen.add(signature)
+                attempts.append((request_type, payload))
+        return attempts
+
+    def _normalize_gateway_login_response(self, response, requested_username=''):
+        if not isinstance(response, dict):
+            return {}
+
+        status_raw = str(response.get('status') or response.get('Status') or '').strip()
+        status_lower = status_raw.lower()
+        try:
+            status_number = int(status_raw) if status_raw else None
+        except (TypeError, ValueError):
+            status_number = None
+
+        if response.get('success') is False:
+            return {}
+        if status_lower in {'error', 'failed', 'fail'}:
+            return {}
+        if status_number is not None and status_number >= 3000:
+            return {}
+
+        token = str(response.get('token') or '').strip()
+        if not token:
+            return {}
+
+        code = (
+            str(response.get('code') or '').strip()
+            or str(response.get('username') or '').strip()
+            or str(response.get('user') or '').strip()
+            or (requested_username or '').strip()
+        )
+        if not code:
+            return {}
+
+        normalized = dict(response)
+        normalized['code'] = code
+        normalized['token'] = token
+
+        if not str(normalized.get('database') or '').strip():
+            normalized['database'] = str(
+                response.get('database')
+                or response.get('dbName')
+                or response.get('table')
+                or ''
+            ).strip()
+
+        if not str(normalized.get('role') or '').strip():
+            normalized['role'] = str(response.get('role') or response.get('right') or '').strip()
+
+        if not str(normalized.get('userid') or '').strip():
+            normalized['userid'] = str(response.get('userid') or response.get('userCode') or '').strip()
+
+        if not str(normalized.get('name') or '').strip():
+            normalized['name'] = str(response.get('name') or response.get('username') or code).strip()
+
+        if not str(normalized.get('method') or '').strip():
+            normalized['method'] = 'http'
+
+        return normalized
 
     @staticmethod
     def _generate_local_token(length=32):

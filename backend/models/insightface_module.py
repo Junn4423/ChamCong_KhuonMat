@@ -60,6 +60,25 @@ def get_default_anti_spoof_dirs(model_dir):
     return candidate_dirs
 
 
+def get_runtime_onnx_providers():
+    try:
+        import onnxruntime as ort
+
+        available = list(ort.get_available_providers())
+    except Exception:
+        available = []
+
+    preferred = []
+    if 'OpenVINOExecutionProvider' in available:
+        preferred.append('OpenVINOExecutionProvider')
+    if 'CPUExecutionProvider' in available:
+        preferred.append('CPUExecutionProvider')
+    if not preferred:
+        preferred = ['CPUExecutionProvider']
+
+    return preferred, available
+
+
 class OnnxAntiSpoofingWrapper:
     def __init__(self, model_dir='Silent-Face-Anti-Spoofing/resources/anti_spoof_models'):
         if CropImage is None:
@@ -212,6 +231,10 @@ class AntiSpoofingWrapper:
     def __init__(self, model_dir='Silent-Face-Anti-Spoofing/resources/anti_spoof_models', device_id=0):
         self.backend = None
 
+        if CropImage is None:
+            print('Anti-spoofing: DISABLED (missing Silent-Face-Anti-Spoofing/src)')
+            return
+
         if INTEL_OPTIMIZATION['use_onnx_antispoof']:
             try:
                 self.backend = OnnxAntiSpoofingWrapper(model_dir=model_dir)
@@ -241,12 +264,17 @@ class InsightFaceWrapper:
                 PERFORMANCE_CONFIG['detection_height']
             )
 
-        providers = ['OpenVINOExecutionProvider', 'CPUExecutionProvider']
+        providers, available_providers = get_runtime_onnx_providers()
         self.app = FaceAnalysis(name='buffalo_s', providers=providers)
         self.app.prepare(ctx_id=0, det_size=det_size, det_thresh=det_thresh)
 
-        print('InsightFace initialized with Intel optimizations')
+        print('InsightFace initialized with runtime provider selection')
+        if available_providers:
+            print(f'  Available providers: {", ".join(available_providers)}')
+        print(f'  Selected providers: {", ".join(providers)}')
         print(f'  Detection size: {det_size}, Threshold: {det_thresh}')
+        if 'OpenVINOExecutionProvider' not in providers:
+            print('  OpenVINOExecutionProvider unavailable, using CPUExecutionProvider')
 
         self.anti_spoofing = AntiSpoofingWrapper()
         self._lock = threading.RLock()
