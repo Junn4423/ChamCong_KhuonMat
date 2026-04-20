@@ -14,6 +14,7 @@ MODULE_TOGGLE_KEYS = (
     'offline_manage',
     'report',
     'online_attendance_check',
+    'account_management',
 )
 
 DEFAULT_MODULE_VISIBILITY = {

@@ -1,0 +1,1316 @@
+{
+  "info": {
+    "_postman_id": "4ec1f8e8-7fa8-4f6c-8f4f-3df79b5f0f61",
+    "name": "ERP Services - Current Runtime",
+    "description": "Generated from current backend runtime and erp_http_client call patterns. Includes URL + headers + body for active ERP HTTP service calls.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "1. Gateway Login",
+      "item": [
+        {
+          "name": "Login JSON (primary)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json; charset=utf-8",
+                "type": "text"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "X-DEVICE-TYPE",
+                "value": "{{device_type}}",
+                "type": "text"
+              },
+              {
+                "key": "X-SOF-USER-TOKEN",
+                "value": "{{sof_dev_token}}",
+                "type": "text"
+              },
+              {
+                "key": "SOF-User-Token",
+                "value": "{{sof_dev_token}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"method\": \"loginUser\",\n  \"username\": \"{{username}}\",\n  \"password\": \"{{password}}\",\n  \"TYPE-SOF-CODE\": \"{{type_code}}\",\n  \"deviceType\": \"{{device_type}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{login_url}}"
+          }
+        },
+        {
+          "name": "Login FORM (fallback)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/x-www-form-urlencoded",
+                "type": "text"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "X-DEVICE-TYPE",
+                "value": "{{device_type}}",
+                "type": "text"
+              },
+              {
+                "key": "X-SOF-USER-TOKEN",
+                "value": "{{sof_dev_token}}",
+                "type": "text"
+              },
+              {
+                "key": "SOF-User-Token",
+                "value": "{{sof_dev_token}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                {
+                  "key": "txtUserName",
+                  "value": "{{username}}",
+                  "type": "text"
+                },
+                {
+                  "key": "txtPassword",
+                  "value": "{{password}}",
+                  "type": "text"
+                },
+                {
+                  "key": "txtDeviceType",
+                  "value": "{{device_type}}",
+                  "type": "text"
+                },
+                {
+                  "key": "txtTypeCode",
+                  "value": "{{type_code}}",
+                  "type": "text"
+                }
+              ]
+            },
+            "url": "{{login_url}}"
+          }
+        }
+      ]
+    },
+    {
+      "name": "2. Services.sof.vn Core Calls",
+      "item": [
+        {
+          "name": "List Employees (func=data)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json; charset=utf-8",
+                "type": "text"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "X-DEVICE-TYPE",
+                "value": "{{device_type}}",
+                "type": "text"
+              },
+              {
+                "key": "X-SOF-USER-TOKEN",
+                "value": "{{sof_dev_token}}",
+                "type": "text"
+              },
+              {
+                "key": "SOF-User-Token",
+                "value": "{{sof_dev_token}}",
+                "type": "text"
+              },
+              {
+                "key": "X-USER-TOKEN",
+                "value": "{{user_token}}",
+                "type": "text"
+              },
+              {
+                "key": "X-DATABASE",
+                "value": "{{database}}",
+                "type": "text"
+              },
+              {
+                "key": "X-USER-CODE",
+                "value": "{{user_code}}",
+                "type": "text"
+              },
+              {
+                "key": "X-USER-USERNAME",
+                "value": "{{user_code}}",
+                "type": "text"
+              },
+              {
+                "key": "X-USER-RIGHT",
+                "value": "{{user_role}}",
+                "type": "text"
+              },
+              {
+                "key": "X-SERVER-IP",
+                "value": "{{server_ip}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"table\": \"hr_lv0020\",\n  \"func\": \"data\",\n  \"code\": \"{{user_code}}\",\n  \"token\": \"{{user_token}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{service_url}}"
+          }
+        },
+        {
+          "name": "List Employees (func=LayNhanVien fallback)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json; charset=utf-8",
+                "type": "text"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "X-DEVICE-TYPE",
+                "value": "{{device_type}}",
+                "type": "text"
+              },
+              {
+                "key": "X-SOF-USER-TOKEN",
+                "value": "{{sof_dev_token}}",
+                "type": "text"
+              },
+              {
+                "key": "SOF-User-Token",
+                "value": "{{sof_dev_token}}",
+                "type": "text"
+              },
+              {
+                "key": "X-USER-TOKEN",
+                "value": "{{user_token}}",
+                "type": "text"
+              },
+              {
+                "key": "X-DATABASE",
+                "value": "{{database}}",
+                "type": "text"
+              },
+              {
+                "key": "X-USER-CODE",
+                "value": "{{user_code}}",
+                "type": "text"
+              },
+              {
+                "key": "X-USER-USERNAME",
+                "value": "{{user_code}}",
+                "type": "text"
+              },
+              {
+                "key": "X-USER-RIGHT",
+                "value": "{{user_role}}",
+                "type": "text"
+              },
+              {
+                "key": "X-SERVER-IP",
+                "value": "{{server_ip}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"table\": \"hr_lv0020\",\n  \"func\": \"LayNhanVien\",\n  \"code\": \"{{user_code}}\",\n  \"token\": \"{{user_token}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{service_url}}"
+          }
+        },
+        {
+          "name": "Get Employee By ID",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json; charset=utf-8",
+                "type": "text"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "X-DEVICE-TYPE",
+                "value": "{{device_type}}",
+                "type": "text"
+              },
+              {
+                "key": "X-SOF-USER-TOKEN",
+                "value": "{{sof_dev_token}}",
+                "type": "text"
+              },
+              {
+                "key": "SOF-User-Token",
+                "value": "{{sof_dev_token}}",
+                "type": "text"
+              },
+              {
+                "key": "X-USER-TOKEN",
+                "value": "{{user_token}}",
+                "type": "text"
+              },
+              {
+                "key": "X-DATABASE",
+                "value": "{{database}}",
+                "type": "text"
+              },
+              {
+                "key": "X-USER-CODE",
+                "value": "{{user_code}}",
+                "type": "text"
+              },
+              {
+                "key": "X-USER-USERNAME",
+                "value": "{{user_code}}",
+                "type": "text"
+              },
+              {
+                "key": "X-USER-RIGHT",
+                "value": "{{user_role}}",
+                "type": "text"
+              },
+              {
+                "key": "X-SERVER-IP",
+                "value": "{{server_ip}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"table\": \"hr_lv0020\",\n  \"func\": \"layNhanVienTheoMa\",\n  \"maNhanVien\": \"{{employee_id}}\",\n  \"code\": \"{{user_code}}\",\n  \"token\": \"{{user_token}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{service_url}}"
+          }
+        },
+        {
+          "name": "Get Employee Image (getAnhTable/getAnh)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/x-www-form-urlencoded",
+                "type": "text"
+              },
+              {
+                "key": "Accept",
+                "value": "*/*",
+                "type": "text"
+              },
+              {
+                "key": "X-DEVICE-TYPE",
+                "value": "{{device_type}}",
+                "type": "text"
+              },
+              {
+                "key": "X-SOF-USER-TOKEN",
+                "value": "{{sof_dev_token}}",
+                "type": "text"
+              },
+              {
+                "key": "SOF-User-Token",
+                "value": "{{sof_dev_token}}",
+                "type": "text"
+              },
+              {
+                "key": "X-USER-TOKEN",
+                "value": "{{user_token}}",
+                "type": "text"
+              },
+              {
+                "key": "X-DATABASE",
+                "value": "{{database}}",
+                "type": "text"
+              },
+              {
+                "key": "X-USER-CODE",
+                "value": "{{user_code}}",
+                "type": "text"
+              },
+              {
+                "key": "X-USER-USERNAME",
+                "value": "{{user_code}}",
+                "type": "text"
+              },
+              {
+                "key": "X-USER-RIGHT",
+                "value": "{{user_role}}",
+                "type": "text"
+              },
+              {
+                "key": "X-SERVER-IP",
+                "value": "{{server_ip}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                {
+                  "key": "table",
+                  "value": "getAnhTable",
+                  "type": "text"
+                },
+                {
+                  "key": "func",
+                  "value": "getAnh",
+                  "type": "text"
+                },
+                {
+                  "key": "lv001",
+                  "value": "{{employee_id}}",
+                  "type": "text"
+                },
+                {
+                  "key": "cot",
+                  "value": "{{image_column}}",
+                  "type": "text"
+                },
+                {
+                  "key": "code",
+                  "value": "{{user_code}}",
+                  "type": "text"
+                },
+                {
+                  "key": "token",
+                  "value": "{{user_token}}",
+                  "type": "text"
+                }
+              ]
+            },
+            "url": "{{service_url}}"
+          }
+        },
+        {
+          "name": "Upload Employee Image (cr_lv0382/uploadAnh)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "X-DEVICE-TYPE",
+                "value": "{{device_type}}",
+                "type": "text"
+              },
+              {
+                "key": "X-SOF-USER-TOKEN",
+                "value": "{{sof_dev_token}}",
+                "type": "text"
+              },
+              {
+                "key": "SOF-User-Token",
+                "value": "{{sof_dev_token}}",
+                "type": "text"
+              },
+              {
+                "key": "X-USER-TOKEN",
+                "value": "{{user_token}}",
+                "type": "text"
+              },
+              {
+                "key": "X-DATABASE",
+                "value": "{{database}}",
+                "type": "text"
+              },
+              {
+                "key": "X-USER-CODE",
+                "value": "{{user_code}}",
+                "type": "text"
+              },
+              {
+                "key": "X-USER-USERNAME",
+                "value": "{{user_code}}",
+                "type": "text"
+              },
+              {
+                "key": "X-USER-RIGHT",
+                "value": "{{user_role}}",
+                "type": "text"
+              },
+              {
+                "key": "X-SERVER-IP",
+                "value": "{{server_ip}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "table",
+                  "value": "cr_lv0382",
+                  "type": "text"
+                },
+                {
+                  "key": "func",
+                  "value": "uploadAnh",
+                  "type": "text"
+                },
+                {
+                  "key": "lv001",
+                  "value": "{{employee_id}}",
+                  "type": "text"
+                },
+                {
+                  "key": "cot",
+                  "value": "{{image_column}}",
+                  "type": "text"
+                },
+                {
+                  "key": "code",
+                  "value": "{{user_code}}",
+                  "type": "text"
+                },
+                {
+                  "key": "token",
+                  "value": "{{user_token}}",
+                  "type": "text"
+                },
+                {
+                  "key": "image",
+                  "type": "file",
+                  "src": "{{local_image_path}}"
+                }
+              ]
+            },
+            "url": "{{service_url}}"
+          }
+        },
+        {
+          "name": "Update Employee Image Token (hr_lv0020/updateImageToken)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json; charset=utf-8",
+                "type": "text"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "X-DEVICE-TYPE",
+                "value": "{{device_type}}",
+                "type": "text"
+              },
+              {
+                "key": "X-SOF-USER-TOKEN",
+                "value": "{{sof_dev_token}}",
+                "type": "text"
+              },
+              {
+                "key": "SOF-User-Token",
+                "value": "{{sof_dev_token}}",
+                "type": "text"
+              },
+              {
+                "key": "X-USER-TOKEN",
+                "value": "{{user_token}}",
+                "type": "text"
+              },
+              {
+                "key": "X-DATABASE",
+                "value": "{{database}}",
+                "type": "text"
+              },
+              {
+                "key": "X-USER-CODE",
+                "value": "{{user_code}}",
+                "type": "text"
+              },
+              {
+                "key": "X-USER-USERNAME",
+                "value": "{{user_code}}",
+                "type": "text"
+              },
+              {
+                "key": "X-USER-RIGHT",
+                "value": "{{user_role}}",
+                "type": "text"
+              },
+              {
+                "key": "X-SERVER-IP",
+                "value": "{{server_ip}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"table\": \"hr_lv0020\",\n  \"func\": \"updateImageToken\",\n  \"lv001\": \"{{employee_id}}\",\n  \"tokenAnh\": \"{{image_token}}\",\n  \"cot\": \"{{token_column}}\",\n  \"code\": \"{{user_code}}\",\n  \"token\": \"{{user_token}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{service_url}}"
+          }
+        },
+        {
+          "name": "Push Attendance (chamcong_ngocchung/pushAttendance)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json; charset=utf-8",
+                "type": "text"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "X-DEVICE-TYPE",
+                "value": "{{device_type}}",
+                "type": "text"
+              },
+              {
+                "key": "X-SOF-USER-TOKEN",
+                "value": "{{sof_dev_token}}",
+                "type": "text"
+              },
+              {
+                "key": "SOF-User-Token",
+                "value": "{{sof_dev_token}}",
+                "type": "text"
+              },
+              {
+                "key": "X-USER-TOKEN",
+                "value": "{{user_token}}",
+                "type": "text"
+              },
+              {
+                "key": "X-DATABASE",
+                "value": "{{database}}",
+                "type": "text"
+              },
+              {
+                "key": "X-USER-CODE",
+                "value": "{{user_code}}",
+                "type": "text"
+              },
+              {
+                "key": "X-USER-USERNAME",
+                "value": "{{user_code}}",
+                "type": "text"
+              },
+              {
+                "key": "X-USER-RIGHT",
+                "value": "{{user_role}}",
+                "type": "text"
+              },
+              {
+                "key": "X-SERVER-IP",
+                "value": "{{server_ip}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"table\": \"chamcong_ngocchung\",\n  \"func\": \"pushAttendance\",\n  \"employee_id\": \"{{employee_id}}\",\n  \"attendance_date\": \"{{attendance_date}}\",\n  \"attendance_time\": \"{{attendance_time}}\",\n  \"attendance_type\": \"{{attendance_type}}\",\n  \"source\": \"{{source}}\",\n  \"camera_ip\": \"{{camera_ip}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{service_url}}"
+          }
+        },
+        {
+          "name": "Check Recent Attendance (chamcong_ngocchung/checkRecentAttendance)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json; charset=utf-8",
+                "type": "text"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "X-DEVICE-TYPE",
+                "value": "{{device_type}}",
+                "type": "text"
+              },
+              {
+                "key": "X-SOF-USER-TOKEN",
+                "value": "{{sof_dev_token}}",
+                "type": "text"
+              },
+              {
+                "key": "SOF-User-Token",
+                "value": "{{sof_dev_token}}",
+                "type": "text"
+              },
+              {
+                "key": "X-USER-TOKEN",
+                "value": "{{user_token}}",
+                "type": "text"
+              },
+              {
+                "key": "X-DATABASE",
+                "value": "{{database}}",
+                "type": "text"
+              },
+              {
+                "key": "X-USER-CODE",
+                "value": "{{user_code}}",
+                "type": "text"
+              },
+              {
+                "key": "X-USER-USERNAME",
+                "value": "{{user_code}}",
+                "type": "text"
+              },
+              {
+                "key": "X-USER-RIGHT",
+                "value": "{{user_role}}",
+                "type": "text"
+              },
+              {
+                "key": "X-SERVER-IP",
+                "value": "{{server_ip}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"table\": \"chamcong_ngocchung\",\n  \"func\": \"checkRecentAttendance\",\n  \"employee_id\": \"{{employee_id}}\",\n  \"minutes\": {{minutes}}\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{service_url}}"
+          }
+        },
+        {
+          "name": "Get Online Attendance (chamcong_ngocchung/getOnlineAttendance)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json; charset=utf-8",
+                "type": "text"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "X-DEVICE-TYPE",
+                "value": "{{device_type}}",
+                "type": "text"
+              },
+              {
+                "key": "X-SOF-USER-TOKEN",
+                "value": "{{sof_dev_token}}",
+                "type": "text"
+              },
+              {
+                "key": "SOF-User-Token",
+                "value": "{{sof_dev_token}}",
+                "type": "text"
+              },
+              {
+                "key": "X-USER-TOKEN",
+                "value": "{{user_token}}",
+                "type": "text"
+              },
+              {
+                "key": "X-DATABASE",
+                "value": "{{database}}",
+                "type": "text"
+              },
+              {
+                "key": "X-USER-CODE",
+                "value": "{{user_code}}",
+                "type": "text"
+              },
+              {
+                "key": "X-USER-USERNAME",
+                "value": "{{user_code}}",
+                "type": "text"
+              },
+              {
+                "key": "X-USER-RIGHT",
+                "value": "{{user_role}}",
+                "type": "text"
+              },
+              {
+                "key": "X-SERVER-IP",
+                "value": "{{server_ip}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"table\": \"chamcong_ngocchung\",\n  \"func\": \"getOnlineAttendance\",\n  \"start_date\": \"{{start_date}}\",\n  \"end_date\": \"{{end_date}}\",\n  \"attendance_type\": \"{{attendance_type}}\",\n  \"sort_by\": \"{{sort_by}}\",\n  \"sort_dir\": \"{{sort_dir}}\",\n  \"page\": {{page}},\n  \"page_size\": {{page_size}},\n  \"employee_id\": \"{{employee_id}}\",\n  \"keyword\": \"{{keyword}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{service_url}}"
+          }
+        }
+      ]
+    },
+    {
+      "name": "3. Image Fallback URLs",
+      "item": [
+        {
+          "name": "Get Image By Token URL",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "image/*,*/*",
+                "type": "text"
+              }
+            ],
+            "url": "{{token_image_base_url}}/{{image_token}}"
+          }
+        },
+        {
+          "name": "Get Image Via loadAnh.php",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "image/*,*/*",
+                "type": "text"
+              },
+              {
+                "key": "X-DEVICE-TYPE",
+                "value": "{{device_type}}",
+                "type": "text"
+              },
+              {
+                "key": "X-SOF-USER-TOKEN",
+                "value": "{{sof_dev_token}}",
+                "type": "text"
+              },
+              {
+                "key": "SOF-User-Token",
+                "value": "{{sof_dev_token}}",
+                "type": "text"
+              },
+              {
+                "key": "X-USER-TOKEN",
+                "value": "{{user_token}}",
+                "type": "text"
+              },
+              {
+                "key": "X-DATABASE",
+                "value": "{{database}}",
+                "type": "text"
+              },
+              {
+                "key": "X-USER-CODE",
+                "value": "{{user_code}}",
+                "type": "text"
+              },
+              {
+                "key": "X-USER-USERNAME",
+                "value": "{{user_code}}",
+                "type": "text"
+              },
+              {
+                "key": "X-USER-RIGHT",
+                "value": "{{user_role}}",
+                "type": "text"
+              },
+              {
+                "key": "X-SERVER-IP",
+                "value": "{{server_ip}}",
+                "type": "text"
+              }
+            ],
+            "url": "{{service_dir_url}}loadAnh.php?filename={{image_filename}}&subdir={{image_subdir}}"
+          }
+        }
+      ]
+    },
+    {
+      "name": "4. Token Register Service",
+      "item": [
+        {
+          "name": "Create SOF Token (JSON ImgSOF)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json; charset=utf-8",
+                "type": "text"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "X-DEVICE-TYPE",
+                "value": "{{device_type}}",
+                "type": "text"
+              },
+              {
+                "key": "X-SOF-USER-TOKEN",
+                "value": "{{sof_dev_token}}",
+                "type": "text"
+              },
+              {
+                "key": "SOF-User-Token",
+                "value": "{{sof_dev_token}}",
+                "type": "text"
+              },
+              {
+                "key": "SOF-USER-TOKEN",
+                "value": "{{sof_dev_token}}",
+                "type": "text"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{sof_dev_token}}",
+                "type": "text"
+              },
+              {
+                "key": "SOF-Token",
+                "value": "{{token_register_api_token}}",
+                "type": "text"
+              },
+              {
+                "key": "SOF-TOKEN",
+                "value": "{{token_register_api_token}}",
+                "type": "text"
+              },
+              {
+                "key": "SOF-User",
+                "value": "{{user_code}}",
+                "type": "text"
+              },
+              {
+                "key": "Admin-Contact",
+                "value": "{{user_code}}",
+                "type": "text"
+              },
+              {
+                "key": "X-Admin-Contact",
+                "value": "{{user_code}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"{{user_code}}\",\n  \"ImgSOF\": \"{{image_base64}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{token_register_url}}"
+          }
+        },
+        {
+          "name": "Create SOF Token (JSON _ImgSOF)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json; charset=utf-8",
+                "type": "text"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "X-DEVICE-TYPE",
+                "value": "{{device_type}}",
+                "type": "text"
+              },
+              {
+                "key": "X-SOF-USER-TOKEN",
+                "value": "{{sof_dev_token}}",
+                "type": "text"
+              },
+              {
+                "key": "SOF-User-Token",
+                "value": "{{sof_dev_token}}",
+                "type": "text"
+              },
+              {
+                "key": "SOF-USER-TOKEN",
+                "value": "{{sof_dev_token}}",
+                "type": "text"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{sof_dev_token}}",
+                "type": "text"
+              },
+              {
+                "key": "SOF-Token",
+                "value": "{{token_register_api_token}}",
+                "type": "text"
+              },
+              {
+                "key": "SOF-TOKEN",
+                "value": "{{token_register_api_token}}",
+                "type": "text"
+              },
+              {
+                "key": "SOF-User",
+                "value": "{{user_code}}",
+                "type": "text"
+              },
+              {
+                "key": "Admin-Contact",
+                "value": "{{user_code}}",
+                "type": "text"
+              },
+              {
+                "key": "X-Admin-Contact",
+                "value": "{{user_code}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"{{user_code}}\",\n  \"_ImgSOF\": \"{{image_base64}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{token_register_url}}"
+          }
+        },
+        {
+          "name": "Create SOF Token (FORM _ImgSOF)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/x-www-form-urlencoded",
+                "type": "text"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "X-DEVICE-TYPE",
+                "value": "{{device_type}}",
+                "type": "text"
+              },
+              {
+                "key": "X-SOF-USER-TOKEN",
+                "value": "{{sof_dev_token}}",
+                "type": "text"
+              },
+              {
+                "key": "SOF-User-Token",
+                "value": "{{sof_dev_token}}",
+                "type": "text"
+              },
+              {
+                "key": "SOF-USER-TOKEN",
+                "value": "{{sof_dev_token}}",
+                "type": "text"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{sof_dev_token}}",
+                "type": "text"
+              },
+              {
+                "key": "SOF-Token",
+                "value": "{{token_register_api_token}}",
+                "type": "text"
+              },
+              {
+                "key": "SOF-TOKEN",
+                "value": "{{token_register_api_token}}",
+                "type": "text"
+              },
+              {
+                "key": "SOF-User",
+                "value": "{{user_code}}",
+                "type": "text"
+              },
+              {
+                "key": "Admin-Contact",
+                "value": "{{user_code}}",
+                "type": "text"
+              },
+              {
+                "key": "X-Admin-Contact",
+                "value": "{{user_code}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                {
+                  "key": "username",
+                  "value": "{{user_code}}",
+                  "type": "text"
+                },
+                {
+                  "key": "_ImgSOF",
+                  "value": "{{image_base64}}",
+                  "type": "text"
+                }
+              ]
+            },
+            "url": "{{token_register_url}}"
+          }
+        }
+      ]
+    }
+  ],
+  "variable": [
+    {
+      "key": "login_url",
+      "value": "http://login.sof.com.vn/login.sof.vn/index.php"
+    },
+    {
+      "key": "service_url",
+      "value": "http://erp.banhangonline.top/chamcong/services.sof.vn/index.php"
+    },
+    {
+      "key": "service_url_fallback",
+      "value": "http://app.banhang.banhangonline.top:8001/chamcong/services.sof.vn/index.php"
+    },
+    {
+      "key": "service_path_suffix",
+      "value": "/chamcong/services.sof.vn/index.php"
+    },
+    {
+      "key": "service_dir_url",
+      "value": "http://erp.banhangonline.top/chamcong/services.sof.vn/"
+    },
+    {
+      "key": "device_type",
+      "value": "desktop"
+    },
+    {
+      "key": "type_code",
+      "value": "ERP"
+    },
+    {
+      "key": "sof_dev_token",
+      "value": "8c4f2b9a71d6e3c9f0ab42d5e8c1f7a39b6d0e4f1a2c8b7d5e9f3a1c6b4d2e8"
+    },
+    {
+      "key": "username",
+      "value": "erp.pro1"
+    },
+    {
+      "key": "password",
+      "value": ""
+    },
+    {
+      "key": "user_token",
+      "value": "80NZ3L441F553558"
+    },
+    {
+      "key": "database",
+      "value": "erp_pro_v1_0"
+    },
+    {
+      "key": "user_code",
+      "value": "erp.pro1"
+    },
+    {
+      "key": "user_role",
+      "value": "ERP_PRO@admin"
+    },
+    {
+      "key": "server_ip",
+      "value": ""
+    },
+    {
+      "key": "employee_id",
+      "value": ""
+    },
+    {
+      "key": "image_column",
+      "value": "lv008"
+    },
+    {
+      "key": "token_column",
+      "value": "lv007"
+    },
+    {
+      "key": "local_image_path",
+      "value": ""
+    },
+    {
+      "key": "image_token",
+      "value": ""
+    },
+    {
+      "key": "attendance_date",
+      "value": "2026-04-20"
+    },
+    {
+      "key": "attendance_time",
+      "value": "08:00:00"
+    },
+    {
+      "key": "attendance_type",
+      "value": "IN"
+    },
+    {
+      "key": "source",
+      "value": "Camera"
+    },
+    {
+      "key": "camera_ip",
+      "value": "192.168.1.97"
+    },
+    {
+      "key": "minutes",
+      "value": "10"
+    },
+    {
+      "key": "start_date",
+      "value": "2026-04-20"
+    },
+    {
+      "key": "end_date",
+      "value": "2026-04-20"
+    },
+    {
+      "key": "sort_by",
+      "value": "date"
+    },
+    {
+      "key": "sort_dir",
+      "value": "desc"
+    },
+    {
+      "key": "page",
+      "value": "1"
+    },
+    {
+      "key": "page_size",
+      "value": "50"
+    },
+    {
+      "key": "keyword",
+      "value": ""
+    },
+    {
+      "key": "image_filename",
+      "value": ""
+    },
+    {
+      "key": "image_subdir",
+      "value": ""
+    },
+    {
+      "key": "token_image_base_url",
+      "value": "http://192.168.1.87/token"
+    },
+    {
+      "key": "token_register_url",
+      "value": "http://192.168.1.87/createtoken/index.php"
+    },
+    {
+      "key": "token_register_username",
+      "value": "admin"
+    },
+    {
+      "key": "token_register_api_token",
+      "value": "ABC"
+    },
+    {
+      "key": "image_base64",
+      "value": ""
+    }
+  ]
+}

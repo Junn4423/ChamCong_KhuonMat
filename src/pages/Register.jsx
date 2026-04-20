@@ -1,6 +1,7 @@
 ﻿import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { api, getSessionToken } from '../services/api'
+import { ROUTES } from '../config/routes'
 import { useToast } from '../components/Toast'
 import { Download, Eye, RotateCw, UserSquare } from 'lucide-react'
 
@@ -620,10 +621,24 @@ export default function Register() {
           total,
           without_face,
           overwrite_existing,
+          account_sync,
         } = res.result || {}
 
+        let accountSyncText = ''
+        if (account_sync && typeof account_sync === 'object') {
+          if (account_sync.error) {
+            accountSyncText = ` Đồng bộ tài khoản: lỗi (${account_sync.error}).`
+          } else {
+            accountSyncText = (
+              ` Đồng bộ tài khoản: tạo mới ${account_sync.created || 0}, `
+              + `cập nhật ${account_sync.updated || 0}, `
+              + `đổi hash ${account_sync.password_updated || 0}.`
+            )
+          }
+        }
+
         toast.success(
-          `Đã xử lý ${total} nhân viên đã chọn. Thêm mới: ${imported || 0}, cập nhật: ${updated || 0}, bỏ qua: ${skipped || 0}, chưa có khuôn mặt: ${without_face || 0}, lỗi: ${errors || 0}.${overwrite_existing ? ' Dữ liệu cũ đã được overwrite theo lựa chọn.' : ''}`
+          `Đã xử lý ${total} nhân viên đã chọn. Thêm mới: ${imported || 0}, cập nhật: ${updated || 0}, bỏ qua: ${skipped || 0}, chưa có khuôn mặt: ${without_face || 0}, lỗi: ${errors || 0}.${overwrite_existing ? ' Dữ liệu cũ đã được overwrite theo lựa chọn.' : ''}${accountSyncText}`
         )
         await loadErpEmployees(selectedEmployeeId, { keepCurrentSelection: true })
       } else {
@@ -661,7 +676,7 @@ export default function Register() {
           </button>
 
           <button
-            onClick={() => navigate('/xu-ly-dong-bo?run=1')}
+            onClick={() => navigate(`${ROUTES.syncVerify}?run=1`)}
             disabled={isInternalMode}
             className="w-full sm:w-auto flex items-center justify-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-xl text-sm font-semibold hover:bg-indigo-700 disabled:opacity-50 transition-colors"
           >

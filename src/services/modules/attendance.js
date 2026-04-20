@@ -44,6 +44,30 @@ export const attendanceApi = {
     body: JSON.stringify(data),
   }),
 
+  employeeAttendanceImage: (formData) => request('/api/employee/attendance_image', {
+    method: 'POST',
+    body: formData,
+  }),
+
+  employeeAttendanceImageBase64: (data) => request('/api/employee/attendance_image', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  }),
+
+  employeeAttendanceDetectFrame: (data) => request('/api/employee/attendance_detect', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  }),
+
+  getEmployeeAttendanceHistory: (filters = {}) => {
+    const query = buildReportQuery(filters)
+    return request(`/api/employee/attendance/history${query ? `?${query}` : ''}`)
+  },
+
+  getEmployeeAttendanceSettings: () => request('/api/employee/attendance_settings'),
+
   attendanceDetectFrame: (data) => request('/api/attendance_detect', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

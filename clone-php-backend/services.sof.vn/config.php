@@ -5,6 +5,7 @@ define("DB_PORT", getenv('DB_PORT') ? (int)getenv('DB_PORT') : (getenv('MYSQL_PO
 define("DB_USER", getenv('DB_USER') ? getenv('DB_USER') : (getenv('MYSQL_USER') ? getenv('MYSQL_USER') : 'root'));
 define("DB_PWD", getenv('DB_PWD') ? getenv('DB_PWD') : (getenv('MYSQL_PASSWORD') ? getenv('MYSQL_PASSWORD') : 'SofSql@2025.'));
 define("DB_DATABASE", getenv('DB_DATABASE') ? getenv('DB_DATABASE') : (getenv('MYSQL_DATABASE') ? getenv('MYSQL_DATABASE') : 'erp_sofv4_0'));
+define("DB_DOCS_DATABASE", getenv('DB_DOCS_DATABASE') ? getenv('DB_DOCS_DATABASE') : (getenv('ERP_DOCS_DATABASE') ? getenv('ERP_DOCS_DATABASE') : DB_DATABASE));
 if (!defined("COUCHDB_HOST")) define("COUCHDB_HOST", getenv('COUCHDB_HOST') ? getenv('COUCHDB_HOST') : '192.168.1.20');
 if (!defined("COUCHDB_PORT")) define("COUCHDB_PORT", getenv('COUCHDB_PORT') ? getenv('COUCHDB_PORT') : '5984');
 if (!defined("COUCHDB_USER")) define("COUCHDB_USER", getenv('COUCHDB_USER') ? getenv('COUCHDB_USER') : 'admin');
@@ -86,6 +87,58 @@ function lv_normalize_db_name($value)
 		return '';
 	}
 	return $value;
+}
+
+function lv_resolve_documents_database()
+{
+	static $cachedDocsDatabase = null;
+	if (is_string($cachedDocsDatabase) && $cachedDocsDatabase !== '') {
+		return $cachedDocsDatabase;
+	}
+
+	$headerCandidates = array(
+		lv_get_request_header_value('X-DOCS-DATABASE'),
+		lv_get_request_header_value('X-DOCUMENTS-DATABASE'),
+	);
+	foreach ($headerCandidates as $candidate) {
+		$normalized = lv_normalize_db_name($candidate);
+		if ($normalized !== '') {
+			$cachedDocsDatabase = $normalized;
+			return $cachedDocsDatabase;
+		}
+	}
+
+	$envCandidates = array(
+		getenv('DB_DOCS_DATABASE'),
+		getenv('ERP_DOCS_DATABASE'),
+		defined('DB_DOCS_DATABASE') ? DB_DOCS_DATABASE : '',
+		defined('DB_DATABASE') ? DB_DATABASE : '',
+	);
+	foreach ($envCandidates as $candidate) {
+		$normalized = lv_normalize_db_name($candidate);
+		if ($normalized !== '') {
+			$cachedDocsDatabase = $normalized;
+			return $cachedDocsDatabase;
+		}
+	}
+
+	$cachedDocsDatabase = '';
+	return $cachedDocsDatabase;
+}
+
+function lv_docs_table_name($tableName)
+{
+	$normalizedTable = lv_normalize_db_name($tableName);
+	if ($normalizedTable === '') {
+		return '';
+	}
+
+	$docsDatabase = lv_resolve_documents_database();
+	if ($docsDatabase === '') {
+		return "`{$normalizedTable}`";
+	}
+
+	return "`{$docsDatabase}`.`{$normalizedTable}`";
 }
 
 function lv_normalize_host($value)

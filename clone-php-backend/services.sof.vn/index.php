@@ -84,10 +84,23 @@ $vOutput = array();
 function saveImageToDB($fileData, $cot, $lv001)
 {
 	try {
+		$cot = trim((string)$cot);
+		if (!preg_match('/^lv[0-9]{3}$/', $cot)) {
+			throw new Exception("Tên cột không hợp lệ");
+		}
+
+		$docsTable = function_exists('lv_docs_table_name') ? lv_docs_table_name('cr_lv0382') : '`cr_lv0382`';
+		if ($docsTable === '') {
+			throw new Exception("Không xác định được bảng tài liệu ảnh");
+		}
+
 		// Kết nối đến CSDL
 		$db = db_connect();
+		if (!$db) {
+			throw new Exception("Lỗi kết nối CSDL");
+		}
 		// Kiểm tra xem lv002 = $lv001 đã tồn tại chưa
-		$checkSql = "SELECT COUNT(*) as count FROM hao_erp_sof_documents_v5_0.cr_lv0382 WHERE lv002 = ?";
+		$checkSql = "SELECT COUNT(*) as count FROM {$docsTable} WHERE lv002 = ?";
 
 		$checkStmt = mysqli_prepare($db, $checkSql);
 		mysqli_stmt_bind_param($checkStmt, "s", $lv001);
@@ -99,9 +112,9 @@ function saveImageToDB($fileData, $cot, $lv001)
 
 
 		if ($exists) {
-			$sql = "UPDATE hao_erp_sof_documents_v5_0.cr_lv0382 SET $cot = ? WHERE lv002 = ?";
+			$sql = "UPDATE {$docsTable} SET {$cot} = ? WHERE lv002 = ?";
 		} else {
-			$sql = "INSERT INTO hao_erp_sof_documents_v5_0.cr_lv0382 (lv002, $cot) VALUES (?, ?)";
+			$sql = "INSERT INTO {$docsTable} (lv002, {$cot}) VALUES (?, ?)";
 		}
 
 		$stmt = mysqli_prepare($db, $sql);
@@ -480,6 +493,12 @@ switch ($vtable) {
 			case "getAnh":
 				$lv001 = $input['lv001'] ?? $_POST['lv001'] ?? $_GET['lv001'];
 				$cot = $input['cot'] ?? $_POST['cot'] ?? $_GET['cot'];
+					$cot = trim((string)$cot);
+					if (!preg_match('/^lv[0-9]{3}$/', $cot)) {
+						http_response_code(400);
+						echo "Invalid cot parameter.";
+						break;
+					}
 				if ($lv001) {
 					// Kết nối đến CSDL
 					$db = db_connect(); // Đảm bảo bạn đã gọi đúng hàm kết nối
@@ -493,9 +512,15 @@ switch ($vtable) {
 
 					// Sử dụng mysqli_real_escape_string để bảo vệ khỏi SQL Injection
 					$lv001 = mysqli_real_escape_string($db, $lv001);
+					$docsTable = function_exists('lv_docs_table_name') ? lv_docs_table_name('cr_lv0382') : '`cr_lv0382`';
+					if ($docsTable === '') {
+						http_response_code(500);
+						echo "Cannot resolve documents table.";
+						break;
+					}
 
 					// Tạo câu truy vấn SQL
-					$sql = "SELECT $cot FROM hao_erp_sof_documents_v5_0.cr_lv0382 WHERE lv002 = '$lv001'";
+					$sql = "SELECT {$cot} FROM {$docsTable} WHERE lv002 = '$lv001'";
 					// Thực thi câu lệnh SQL
 					$vresult = db_query($sql);
 

@@ -1,21 +1,18 @@
 export const ROUTES = Object.freeze({
-  login: '/login',
-  dashboard: '/',
-  attendance: '/diem-danh',
-  cameraManagement: '/quan-ly-camera',
-  onlineSync: '/dong-bo-nhan-vien-online',
-  syncVerify: '/xu-ly-dong-bo',
-  offlineManage: '/quan-ly-nhan-vien-offline',
-  report: '/bao-cao',
-  onlineAttendanceCheck: '/kiem-tra-cham-cong-online',
-  systemSettings: '/cai-dat-he-thong',
+  portal: '/',
+  login: '/admin/login',
+  dashboard: '/admin',
+  attendance: '/admin/diem-danh',
+  cameraManagement: '/admin/quan-ly-camera',
+  onlineSync: '/admin/dong-bo-nhan-vien-online',
+  syncVerify: '/admin/xu-ly-dong-bo',
+  offlineManage: '/admin/quan-ly-nhan-vien-offline',
+  report: '/admin/bao-cao',
+  onlineAttendanceCheck: '/admin/kiem-tra-cham-cong-online',
+  systemSettings: '/admin/cai-dat-he-thong',
+  accountManagement: '/admin/quan-ly-tai-khoan',
+  employeeLogin: '/employee/login',
+  employeeAttendance: '/employee/cham-cong',
 })
 
-export const LEGACY_ROUTE_ALIASES = Object.freeze([
-  { from: '/attendance', to: ROUTES.attendance },
-  { from: '/cameras', to: ROUTES.cameraManagement },
-  { from: '/camera', to: ROUTES.cameraManagement },
-  { from: '/report', to: ROUTES.report },
-  { from: '/register', to: ROUTES.onlineSync },
-  { from: '/manage', to: ROUTES.offlineManage },
-])
+export const LEGACY_ROUTE_ALIASES = Object.freeze([])

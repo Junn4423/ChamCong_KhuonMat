@@ -11,6 +11,7 @@ export const MODULE_TOGGLE_KEYS = Object.freeze({
   offlineManage: 'offline_manage',
   report: 'report',
   onlineAttendanceCheck: 'online_attendance_check',
+  accountManagement: 'account_management',
 })
 
 export const MODULE_TOGGLE_DEFINITIONS = Object.freeze([
@@ -55,6 +56,12 @@ export const MODULE_TOGGLE_DEFINITIONS = Object.freeze([
     label: 'Kiểm tra chấm công online',
     path: ROUTES.onlineAttendanceCheck,
     description: 'Bật hoặc tắt module kiểm tra dữ liệu chấm công đã đẩy lên ERP.',
+  },
+  {
+    key: MODULE_TOGGLE_KEYS.accountManagement,
+    label: 'Quản lý tài khoản nhân viên',
+    path: ROUTES.accountManagement,
+    description: 'Bật hoặc tắt module kéo dữ liệu tài khoản nhân viên từ ERP và quản lý lock/reset.',
   },
 ])
 

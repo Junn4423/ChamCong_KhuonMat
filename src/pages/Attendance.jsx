@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api } from '../services/api'
+import { ROUTES } from '../config/routes'
 import {
   ATTENDANCE_MODE_OPTIONS,
   ATTENDANCE_SETTINGS_EVENT,
@@ -1716,7 +1717,7 @@ export default function Attendance() {
             )}
 
             <Link
-              to="/quan-ly-camera"
+              to={ROUTES.cameraManagement}
               className="w-full sm:w-auto px-4 py-2.5 bg-slate-100 text-slate-700 rounded-xl text-sm font-semibold hover:bg-slate-200 transition-colors text-center"
             >
               Quản lý camera

@@ -11,6 +11,7 @@ import {
   BarChart,
   Shuffle,
   Users,
+  KeyRound,
 } from 'lucide-react'
 import { ROUTES } from '../config/routes'
 import {
@@ -33,6 +34,12 @@ const navItems = [
     label: 'Kiểm tra chấm công online',
     icon: Search,
     moduleKey: MODULE_TOGGLE_KEYS.onlineAttendanceCheck,
+  },
+  {
+    to: ROUTES.accountManagement,
+    label: 'Quản lý tài khoản',
+    icon: KeyRound,
+    moduleKey: MODULE_TOGGLE_KEYS.accountManagement,
   },
   { to: ROUTES.systemSettings, label: 'Cài đặt hệ thống', icon: Settings },
 ]
@@ -268,7 +275,7 @@ export default function Layout() {
             <NavLink
               key={item.to}
               to={item.to}
-              end={item.to === '/'}
+              end={item.to === ROUTES.dashboard}
               className={({ isActive }) =>
                 `flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all duration-150 ${
                   isActive

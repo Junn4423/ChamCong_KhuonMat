@@ -19,7 +19,7 @@ from PIL import Image, ImageOps
 
 from flask import request, jsonify, g
 
-from backend.models.database import db, AttendanceLocation, EmployeeImage
+from backend.models.database import db, User, AttendanceLocation, EmployeeImage
 from backend.services.erp_http_client import ERPServiceError, erp_http_client
 from backend.services.geocoding_service import enrich_location_payload
 from backend.routes._state import state
@@ -475,21 +475,35 @@ def serialize_attendance_location(attendance_id):
 # ─── Session / Auth helpers ──────────────────────────────────────────────
 
 def _build_session_user(auth_info):
+    database_value = (auth_info.get('database') or '').strip()
+    db_name_value = (auth_info.get('dbName') or '').strip() or database_value
+    table_value = (auth_info.get('table') or '').strip() or db_name_value or database_value
+
     return {
         'code': auth_info.get('code', ''),
+        'username': auth_info.get('username', auth_info.get('code', '')),
         'name': auth_info.get('name', ''),
         'department': auth_info.get('department', ''),
         'role': auth_info.get('role', ''),
+        'right': auth_info.get('right', auth_info.get('role', '')),
         'userid': auth_info.get('userid', ''),
         'domain': auth_info.get('domain', ''),
         'method': auth_info.get('method', ''),
-        'database': auth_info.get('database', ''),
+        'database': database_value,
+        'dbName': db_name_value,
+        'table': table_value,
         'IPv4': auth_info.get('IPv4', ''),
         'lv006': auth_info.get('lv006', ''),
         'lv900': auth_info.get('lv900', ''),
         'lv705': auth_info.get('lv705', ''),
         'lv667': auth_info.get('lv667', ''),
         'lv040': auth_info.get('lv040', ''),
+        'expireDate': auth_info.get('expireDate', auth_info.get('lv705', '')),
+        'daysRemaining': auth_info.get('daysRemaining'),
+        'expireWarning': auth_info.get('expireWarning'),
+        'orderId': auth_info.get('orderId', ''),
+        'userCode': auth_info.get('userCode', ''),
+        'status': auth_info.get('status'),
         'route_prefix': auth_info.get('route_prefix', ''),
         'routed_database': auth_info.get('routed_database', ''),
         'dispatch_database': auth_info.get('dispatch_database', ''),
@@ -516,15 +530,24 @@ def _to_auth_object(payload):
         auth_obj = {'code': code, 'token': token}
         for key in (
             'database',
+            'dbName',
+            'table',
             'IPv4',
             'server_ip',
             'role',
+            'right',
             'domain',
             'method',
             'lv006',
             'lv900',
             'device_type',
             'type_code',
+            'expireDate',
+            'daysRemaining',
+            'expireWarning',
+            'orderId',
+            'userCode',
+            'status',
             'route_prefix',
             'routed_database',
             'dispatch_database',
@@ -552,18 +575,31 @@ def _to_user_object(payload):
 
 
 def issue_session(auth_info):
+    database_value = (auth_info.get('database') or '').strip()
+    db_name_value = (auth_info.get('dbName') or '').strip() or database_value
+    table_value = (auth_info.get('table') or '').strip() or db_name_value or database_value
+
     token = secrets.token_hex(32)
     auth_payload = {
         'code': (auth_info.get('code') or '').strip(),
         'token': (auth_info.get('token') or '').strip(),
-        'database': (auth_info.get('database') or '').strip(),
+        'database': database_value,
+        'dbName': db_name_value,
+        'table': table_value,
         'IPv4': (auth_info.get('IPv4') or '').strip(),
         'server_ip': (auth_info.get('IPv4') or '').strip(),
         'role': (auth_info.get('role') or '').strip(),
+        'right': (auth_info.get('right') or auth_info.get('role') or '').strip(),
         'domain': (auth_info.get('domain') or '').strip(),
         'method': (auth_info.get('method') or '').strip(),
         'lv006': (auth_info.get('lv006') or '').strip(),
         'lv900': (auth_info.get('lv900') or '').strip(),
+        'expireDate': (auth_info.get('expireDate') or auth_info.get('lv705') or '').strip(),
+        'daysRemaining': auth_info.get('daysRemaining'),
+        'expireWarning': auth_info.get('expireWarning'),
+        'orderId': (auth_info.get('orderId') or '').strip(),
+        'userCode': (auth_info.get('userCode') or '').strip(),
+        'status': auth_info.get('status'),
         'device_type': (auth_info.get('device_type') or '').strip(),
         'type_code': (auth_info.get('type_code') or '').strip(),
         'route_prefix': (auth_info.get('route_prefix') or '').strip(),
@@ -612,6 +648,32 @@ def issue_internal_session(username=''):
     state.erp_sessions[token] = {
         'user': user_payload,
         'mode': 'internal',
+        'expires_at': time.time() + state.SESSION_TTL_SECONDS,
+    }
+    return token, user_payload
+
+
+def issue_employee_session(user, account):
+    if user is None or account is None:
+        raise ERPServiceError('Khong the tao phien cho nhan vien', status_code=500)
+
+    token = secrets.token_hex(32)
+    user_payload = {
+        'code': (account.username or '').strip() or (user.employee_id or '').strip(),
+        'name': (user.name or '').strip() or (user.employee_id or '').strip(),
+        'department': (user.department or '').strip(),
+        'role': 'employee',
+        'userid': str(user.id),
+        'user_id': user.id,
+        'employee_id': (user.employee_id or '').strip(),
+        'account_id': account.id,
+        'auth_mode': 'employee',
+    }
+
+    state.erp_sessions[token] = {
+        'user': user_payload,
+        'mode': 'employee',
+        'employee_account_id': account.id,
         'expires_at': time.time() + state.SESSION_TTL_SECONDS,
     }
     return token, user_payload
@@ -700,4 +762,50 @@ def session_required(f):
         g.erp_auth = auth_obj
         g.session_user = user_obj
         return f(*args, **kwargs)
+    return wrapper
+
+
+def employee_required(f):
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        token, auth_obj, user_obj = resolve_request_auth()
+        if not token or not isinstance(user_obj, dict):
+            return jsonify({
+                'success': False,
+                'message': 'Phien dang nhap nhan vien da het han, vui long dang nhap lai',
+            }), 401
+
+        auth_mode = str(user_obj.get('auth_mode') or '').strip().lower()
+        if auth_mode != 'employee':
+            return jsonify({
+                'success': False,
+                'message': 'Phien hien tai khong phai tai khoan nhan vien',
+            }), 403
+
+        user_id_raw = user_obj.get('user_id')
+        employee_id = str(user_obj.get('employee_id') or '').strip()
+
+        user_row = None
+        if user_id_raw is not None:
+            try:
+                user_row = User.query.get(int(user_id_raw))
+            except (TypeError, ValueError):
+                user_row = None
+
+        if user_row is None and employee_id:
+            user_row = User.query.filter_by(employee_id=employee_id).first()
+
+        if user_row is None:
+            return jsonify({
+                'success': False,
+                'message': 'Khong tim thay nhan vien tuong ung voi phien dang nhap',
+            }), 401
+
+        g.session_token = token
+        g.session_user = user_obj
+        g.employee_user = user_row
+        if auth_obj:
+            g.erp_auth = auth_obj
+        return f(*args, **kwargs)
+
     return wrapper

@@ -57,4 +57,31 @@ export const employeeApi = {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ employee_id: employeeId }),
   }),
+
+  // --- Employee account management (admin) ---
+  getEmployeeAccounts: () => request('/api/admin/employee_accounts'),
+
+  pullEmployeeAccounts: (payload = {}) => request('/api/admin/employee_accounts/pull', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  }),
+
+  upsertEmployeeAccount: (payload = {}) => request('/api/admin/employee_accounts/upsert', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  }),
+
+  resetEmployeeAccountPassword: (accountId, newPassword) => request('/api/admin/employee_accounts/reset_password', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ account_id: accountId, new_password: newPassword }),
+  }),
+
+  setEmployeeAccountLock: (accountId, isLocked) => request('/api/admin/employee_accounts/lock', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ account_id: accountId, is_locked: Boolean(isLocked) }),
+  }),
 }

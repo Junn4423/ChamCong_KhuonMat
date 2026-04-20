@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { api, setSessionToken } from '../services/api'
+import { ROUTES } from '../config/routes'
 
 export default function Login() {
   const [form, setForm] = useState({ username: '', password: '' })
@@ -28,7 +29,7 @@ export default function Login() {
     try {
       const res = await api.sessionStatus()
       if (res.is_admin) {
-        navigate('/', { replace: true })
+        navigate(ROUTES.dashboard, { replace: true })
         return
       }
     } catch {
@@ -59,7 +60,7 @@ export default function Login() {
           localStorage.removeItem('savedLoginMode')
         }
 
-        navigate('/', { replace: true })
+        navigate(ROUTES.dashboard, { replace: true })
       } else {
         setError(res.message || (loginMode === 'internal' ? 'Đăng nhập nội bộ thất bại' : 'Đăng nhập hệ thống thất bại'))
       }
@@ -193,6 +194,14 @@ export default function Login() {
         </form>
 
         <p className="text-center text-xs text-slate-400 mt-6">FaceCheck v1.0 · Hệ thống nội bộ</p>
+        <div className="mt-3 text-center">
+          <Link
+            to={ROUTES.employeeLogin}
+            className="inline-flex items-center px-3 py-1.5 rounded-lg text-xs font-medium bg-emerald-50 text-emerald-700 hover:bg-emerald-100 transition-colors"
+          >
+            Sang cổng chấm công nhân viên
+          </Link>
+        </div>
       </div>
     </div>
   )

@@ -7,9 +7,10 @@ from datetime import datetime, date
 
 from flask import Blueprint, request, jsonify, g, Response
 
-from backend.models.database import db, User, Attendance, EmployeeImage
+from backend.models.database import db, User, Attendance, EmployeeImage, EmployeeAccount
 from backend.face_encoding_utils import face_encoding_count, normalize_face_encodings
 from backend.services.erp_http_client import ERPServiceError, erp_http_client
+from backend.services.employee_account_service import employee_account_service
 from backend.services.import_employees import ERPImporter
 from backend.routes._state import state
 from backend.routes._helpers import (
@@ -101,6 +102,12 @@ def _build_face_mismatch(employee_id, local_user, erp_employee, image_row=None):
         'direction_hint': direction_hint,
         'reasons': reasons,
     }
+
+
+def _parse_bool(value):
+    if isinstance(value, bool):
+        return value
+    return str(value or '').strip().lower() in {'1', 'true', 'yes', 'y', 'on'}
 
 
 @employee_bp.route('/api/image/token/<string:image_token>')
@@ -281,6 +288,7 @@ def api_erp_import_all():
         payload = request.get_json(silent=True) or {}
         raw_ids = payload.get('employee_ids')
         overwrite_raw = payload.get('overwrite_existing', False)
+        sync_accounts_raw = payload.get('sync_employee_accounts', True)
 
         employee_ids = []
         if isinstance(raw_ids, list):
@@ -294,6 +302,8 @@ def api_erp_import_all():
             overwrite_existing = overwrite_raw.strip().lower() in {'1', 'true', 'yes', 'y', 'on'}
         else:
             overwrite_existing = bool(overwrite_raw)
+
+        sync_employee_accounts = _parse_bool(sync_accounts_raw)
 
         def save_img_cb(employee_id, image_blob, employee_data=None):
             erp_image_token = ''
@@ -318,6 +328,33 @@ def api_erp_import_all():
             employee_ids=employee_ids,
             overwrite_existing=overwrite_existing,
         )
+
+        account_sync_result = None
+        if sync_employee_accounts:
+            try:
+                account_sync_result = employee_account_service.pull_accounts_from_erp(
+                    g.erp_auth,
+                    overwrite_password=overwrite_existing,
+                    employee_ids=employee_ids,
+                )
+            except ERPServiceError as exc:
+                account_sync_result = {
+                    'error': exc.message,
+                    'status_code': exc.status_code,
+                    'created': 0,
+                    'updated': 0,
+                    'password_updated': 0,
+                }
+            except Exception as exc:
+                account_sync_result = {
+                    'error': str(exc),
+                    'status_code': 500,
+                    'created': 0,
+                    'updated': 0,
+                    'password_updated': 0,
+                }
+
+        result['account_sync'] = account_sync_result
         state.load_known_faces()
         return jsonify({'success': True, 'result': result})
     except ERPServiceError as exc:
@@ -515,6 +552,200 @@ def get_admin_employee_image():
         'image_base64': None if image_url else to_data_uri(image_bytes, image_mime),
         'image_source': image_source,
     })
+
+
+@employee_bp.route('/api/admin/employee_accounts')
+@admin_required
+def get_admin_employee_accounts():
+    try:
+        users = User.query.order_by(User.employee_id.asc()).all()
+        account_rows = EmployeeAccount.query.all()
+        account_by_user_id = {row.user_id: row for row in account_rows}
+
+        accounts = []
+        for user in users:
+            account = account_by_user_id.get(user.id)
+            accounts.append({
+                'user_id': user.id,
+                'employee_id': user.employee_id,
+                'name': user.name,
+                'department': user.department or '',
+                'position': user.position or '',
+                'has_account': bool(account),
+                'account_id': account.id if account else None,
+                'username': account.username if account else '',
+                'is_active': bool(account.is_active) if account else False,
+                'is_locked': bool(account.is_locked) if account else False,
+                'failed_attempts': int(account.failed_attempts or 0) if account else 0,
+                'last_login_at': account.last_login_at.isoformat() if account and account.last_login_at else '',
+                'synced_at': account.synced_at.isoformat() if account and account.synced_at else '',
+                'updated_at': account.updated_at.isoformat() if account and account.updated_at else '',
+            })
+
+        return jsonify({'success': True, 'accounts': accounts})
+    except Exception as exc:
+        return jsonify({'success': False, 'message': str(exc), 'accounts': []}), 500
+
+
+@employee_bp.route('/api/admin/employee_accounts/pull', methods=['POST'])
+@admin_required
+def pull_admin_employee_accounts():
+    if resolve_request_auth_mode(default='internal') != 'system' or not getattr(g, 'erp_auth', None):
+        return jsonify({
+            'success': False,
+            'message': 'Vui long dang nhap he thong de dong bo tai khoan tu ERP',
+        }), 403
+
+    payload = request.get_json(silent=True) or {}
+    raw_ids = payload.get('employee_ids')
+    overwrite_password = _parse_bool(payload.get('overwrite_password'))
+
+    employee_ids = []
+    if isinstance(raw_ids, list):
+        for item in raw_ids:
+            employee_id = str(item or '').strip()
+            if employee_id and employee_id not in employee_ids:
+                employee_ids.append(employee_id)
+
+    try:
+        result = employee_account_service.pull_accounts_from_erp(
+            getattr(g, 'erp_auth', None),
+            overwrite_password=overwrite_password,
+            employee_ids=employee_ids,
+        )
+    except ERPServiceError as exc:
+        return jsonify({'success': False, 'message': exc.message}), (exc.status_code or 500)
+    except Exception as exc:
+        return jsonify({'success': False, 'message': str(exc)}), 500
+
+    has_errors = bool(result.get('errors'))
+    return jsonify({
+        'success': not has_errors,
+        'message': (
+            'Da dong bo tai khoan nhan vien tu ERP'
+            if not has_errors
+            else 'Dong bo tai khoan hoan tat nhung co mot so loi'
+        ),
+        'result': result,
+    }), (207 if has_errors else 200)
+
+
+@employee_bp.route('/api/admin/employee_accounts/upsert', methods=['POST'])
+@admin_required
+def upsert_admin_employee_account():
+    payload = request.get_json(silent=True) or {}
+
+    user_id_raw = payload.get('user_id')
+    employee_id = str(payload.get('employee_id') or '').strip()
+    username = str(payload.get('username') or '').strip()
+    password = payload.get('password')
+
+    user = None
+    if user_id_raw not in (None, ''):
+        try:
+            user = User.query.get(int(user_id_raw))
+        except (TypeError, ValueError):
+            return jsonify({'success': False, 'message': 'user_id khong hop le'}), 400
+
+    if user is None and employee_id:
+        user = User.query.filter_by(employee_id=employee_id).first()
+
+    if user is None:
+        return jsonify({'success': False, 'message': 'Khong tim thay nhan vien de tao tai khoan'}), 404
+
+    try:
+        result = employee_account_service.upsert_account_with_plain_password(
+            user,
+            username=username,
+            password_plain=password,
+        )
+        account = result.get('account')
+        if account is None:
+            return jsonify({'success': False, 'message': 'Khong the tao tai khoan nhan vien'}), 500
+
+        return jsonify({
+            'success': True,
+            'message': (
+                'Da dang ky tai khoan nhan vien'
+                if result.get('created')
+                else 'Da cap nhat tai khoan nhan vien'
+            ),
+            'account': {
+                'account_id': account.id,
+                'user_id': user.id,
+                'employee_id': user.employee_id,
+                'username': account.username,
+                'is_active': bool(account.is_active),
+                'is_locked': bool(account.is_locked),
+                'failed_attempts': int(account.failed_attempts or 0),
+                'created': bool(result.get('created')),
+                'password_updated': bool(result.get('password_updated')),
+            },
+        })
+    except ERPServiceError as exc:
+        return jsonify({'success': False, 'message': exc.message}), (exc.status_code or 400)
+    except Exception as exc:
+        return jsonify({'success': False, 'message': str(exc)}), 500
+
+
+@employee_bp.route('/api/admin/employee_accounts/reset_password', methods=['POST'])
+@admin_required
+def reset_admin_employee_account_password():
+    payload = request.get_json(silent=True) or {}
+    account_id_raw = payload.get('account_id')
+    new_password = payload.get('new_password')
+
+    try:
+        account_id = int(account_id_raw)
+    except (TypeError, ValueError):
+        return jsonify({'success': False, 'message': 'account_id khong hop le'}), 400
+
+    try:
+        account = employee_account_service.reset_password(account_id, new_password)
+        return jsonify({
+            'success': True,
+            'message': 'Da reset mat khau tai khoan nhan vien',
+            'account': {
+                'account_id': account.id,
+                'username': account.username,
+                'is_locked': bool(account.is_locked),
+                'failed_attempts': int(account.failed_attempts or 0),
+            },
+        })
+    except ERPServiceError as exc:
+        return jsonify({'success': False, 'message': exc.message}), (exc.status_code or 400)
+    except Exception as exc:
+        return jsonify({'success': False, 'message': str(exc)}), 500
+
+
+@employee_bp.route('/api/admin/employee_accounts/lock', methods=['POST'])
+@admin_required
+def set_admin_employee_account_lock():
+    payload = request.get_json(silent=True) or {}
+    account_id_raw = payload.get('account_id')
+    is_locked = _parse_bool(payload.get('is_locked'))
+
+    try:
+        account_id = int(account_id_raw)
+    except (TypeError, ValueError):
+        return jsonify({'success': False, 'message': 'account_id khong hop le'}), 400
+
+    try:
+        account = employee_account_service.set_lock_state(account_id, is_locked=is_locked)
+        return jsonify({
+            'success': True,
+            'message': 'Da cap nhat trang thai khoa tai khoan',
+            'account': {
+                'account_id': account.id,
+                'username': account.username,
+                'is_locked': bool(account.is_locked),
+                'failed_attempts': int(account.failed_attempts or 0),
+            },
+        })
+    except ERPServiceError as exc:
+        return jsonify({'success': False, 'message': exc.message}), (exc.status_code or 400)
+    except Exception as exc:
+        return jsonify({'success': False, 'message': str(exc)}), 500
 
 
 @employee_bp.route('/api/admin/update_face', methods=['POST'])

@@ -12,7 +12,12 @@ import OnlineAttendanceCheck from './pages/OnlineAttendanceCheck'
 import SyncVerify from './pages/SyncVerify'
 import Login from './pages/Login'
 import SystemSettings from './pages/SystemSettings'
-import { LEGACY_ROUTE_ALIASES, ROUTES } from './config/routes'
+import EntryPortal from './pages/EntryPortal'
+import EmployeeLogin from './pages/EmployeeLogin'
+import EmployeeAttendance from './pages/EmployeeAttendance'
+import AccountManagement from './pages/AccountManagement'
+import NotFound from './pages/NotFound'
+import { ROUTES } from './config/routes'
 import {
   MODULE_SETTINGS_EVENT,
   MODULE_TOGGLE_KEYS,
@@ -49,7 +54,11 @@ export default function App() {
     <ToastProvider>
       <HashRouter>
         <Routes>
+          <Route path={ROUTES.portal} element={<EntryPortal />} />
           <Route path={ROUTES.login} element={<Login />} />
+          <Route path={ROUTES.employeeLogin} element={<EmployeeLogin />} />
+          <Route path={ROUTES.employeeAttendance} element={<EmployeeAttendance />} />
+
           <Route element={<Layout />}>
             <Route path={ROUTES.dashboard} element={<Dashboard />} />
             <Route
@@ -109,15 +118,16 @@ export default function App() {
               )}
             />
             <Route path={ROUTES.systemSettings} element={<SystemSettings />} />
-            {LEGACY_ROUTE_ALIASES.map(alias => (
-              <Route
-                key={alias.from}
-                path={alias.from}
-                element={<Navigate to={alias.to} replace />}
-              />
-            ))}
+            <Route
+              path={ROUTES.accountManagement}
+              element={(
+                <ModuleGate moduleKey={MODULE_TOGGLE_KEYS.accountManagement}>
+                  <AccountManagement />
+                </ModuleGate>
+              )}
+            />
           </Route>
-          <Route path="*" element={<Navigate to={ROUTES.dashboard} replace />} />
+          <Route path="*" element={<NotFound />} />
         </Routes>
       </HashRouter>
     </ToastProvider>

@@ -4,8 +4,14 @@
 from flask import Blueprint, request, jsonify, g
 
 from backend.services.erp_http_client import ERPServiceError, erp_http_client
+from backend.services.employee_account_service import employee_account_service
 from backend.routes._state import state
-from backend.routes._helpers import resolve_request_auth, issue_session, issue_internal_session
+from backend.routes._helpers import (
+    resolve_request_auth,
+    issue_session,
+    issue_internal_session,
+    issue_employee_session,
+)
 
 auth_bp = Blueprint('auth', __name__)
 
@@ -19,6 +25,29 @@ def _login_erp_account(username, password, client_ip=''):
         'success': True,
         'token': token,
         'user': user_payload,
+    }
+
+
+def _build_auth_status_payload(token, auth_obj, user_obj):
+    auth_mode = None
+    if isinstance(user_obj, dict):
+        auth_mode = str(user_obj.get('auth_mode') or '').strip().lower() or None
+    elif auth_obj:
+        auth_mode = 'system'
+
+    authenticated = bool(user_obj) or bool(auth_obj)
+    is_employee = auth_mode == 'employee'
+    is_admin = bool(auth_obj)
+
+    if not is_admin and token and token in state.admin_tokens:
+        is_admin = auth_mode in {'internal', 'system'}
+
+    return {
+        'authenticated': authenticated,
+        'is_admin': bool(is_admin),
+        'is_employee': bool(is_employee),
+        'auth_mode': auth_mode,
+        'user': user_obj if authenticated else None,
     }
 
 
@@ -53,20 +82,13 @@ def session_logout():
 @auth_bp.route('/api/session/status')
 def session_status():
     token, auth_obj, user_obj = resolve_request_auth()
-    is_admin = bool((token and token in state.admin_tokens and user_obj) or auth_obj)
-    authenticated = bool(auth_obj)
     if token:
         g.session_token = token
-    if authenticated:
+    if auth_obj:
         g.erp_auth = auth_obj
     if user_obj:
         g.session_user = user_obj
-    return jsonify({
-        'authenticated': authenticated,
-        'is_admin': is_admin,
-        'auth_mode': (user_obj or {}).get('auth_mode') if isinstance(user_obj, dict) else None,
-        'user': user_obj if is_admin else None,
-    })
+    return jsonify(_build_auth_status_payload(token, auth_obj, user_obj))
 
 
 @auth_bp.route('/api/admin_login', methods=['POST'])
@@ -117,19 +139,45 @@ def admin_logout():
     return jsonify({'success': True})
 
 
+@auth_bp.route('/api/employee/login', methods=['POST'])
+def employee_login():
+    data = request.get_json(silent=True) or {}
+    username = (data.get('username') or '').strip()
+    password = data.get('password') or ''
+
+    if not username or password is None or str(password) == '':
+        return jsonify({'success': False, 'message': 'Vui lòng nhập tài khoản và mật khẩu nhân viên'}), 400
+
+    try:
+        account, user = employee_account_service.authenticate_employee(username, password)
+        token, user_payload = issue_employee_session(user, account)
+        return jsonify({'success': True, 'token': token, 'user': user_payload})
+    except ERPServiceError as exc:
+        return jsonify({'success': False, 'message': exc.message}), (exc.status_code or 401)
+    except Exception as exc:
+        return jsonify({'success': False, 'message': f'Lỗi đăng nhập nhân viên: {exc}'}), 500
+
+
+@auth_bp.route('/api/employee/logout', methods=['POST'])
+def employee_logout():
+    token = request.headers.get('X-Session-Token') or request.headers.get('X-Admin-Token')
+    if token:
+        state.erp_sessions.pop(token, None)
+        state.admin_tokens.discard(token)
+    return jsonify({'success': True})
+
+
+@auth_bp.route('/api/employee/status')
+def employee_status():
+    token, auth_obj, user_obj = resolve_request_auth()
+    payload = _build_auth_status_payload(token, auth_obj, user_obj)
+    payload['authenticated'] = bool(payload.get('authenticated') and payload.get('is_employee'))
+    if not payload['authenticated']:
+        payload['user'] = None
+    return jsonify(payload)
+
+
 @auth_bp.route('/api/auth_status')
 def auth_status():
     token, auth_obj, user_obj = resolve_request_auth()
-    is_admin = bool((token and token in state.admin_tokens and user_obj) or auth_obj)
-    auth_mode = None
-    if isinstance(user_obj, dict):
-        auth_mode = user_obj.get('auth_mode')
-    elif auth_obj:
-        auth_mode = 'system'
-
-    return jsonify({
-        'is_admin': is_admin,
-        'authenticated': bool(auth_obj),
-        'auth_mode': auth_mode,
-        'user': user_obj,
-    })
+    return jsonify(_build_auth_status_payload(token, auth_obj, user_obj))

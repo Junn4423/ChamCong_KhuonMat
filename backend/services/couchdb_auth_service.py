@@ -529,12 +529,29 @@ class CouchDBDynamicAuthService:
         return routes
 
     def _resolve_domain(self, user_doc, device_type):
+        direct_domain = str(user_doc.get('domain') or '').strip()
+        if direct_domain:
+            return direct_domain
+
         if device_type == 'mobile':
-            return str(user_doc.get('lv665') or '').strip()
+            mobile_domain = str(user_doc.get('lv665') or '').strip()
+            if mobile_domain:
+                return mobile_domain
+
         desktop_domain = str(user_doc.get('lv688') or '').strip()
         if desktop_domain:
             return desktop_domain
+
         return str(user_doc.get('lv668') or '').strip()
+
+    def _resolve_database(self, user_doc, routed_database=''):
+        return self._first_non_empty(
+            user_doc.get('lv670'),
+            user_doc.get('database'),
+            user_doc.get('dbName'),
+            user_doc.get('table'),
+            routed_database,
+        )
 
     def _resolve_device_token(self, user_doc, device_type):
         token_field, _, _ = self.DEVICE_FIELDS[device_type]
@@ -643,16 +660,35 @@ class CouchDBDynamicAuthService:
             raise ERPServiceError('Tai khoan khong co quyen truy cap ung dung nay', status_code=403)
 
         account_code = self._extract_username(user_doc, user_table=target_user_table) or username
+        resolved_domain = self._resolve_domain(user_doc, device)
+        resolved_database = self._resolve_database(user_doc, routed_database=target_db)
+        resolved_db_name = self._first_non_empty(
+            user_doc.get('dbName'),
+            user_doc.get('database'),
+            user_doc.get('table'),
+            resolved_database,
+        )
+        resolved_table = self._first_non_empty(
+            user_doc.get('table'),
+            user_doc.get('dbName'),
+            user_doc.get('database'),
+            resolved_database,
+        )
+
         return {
             'code': account_code,
             'token': self._resolve_device_token(user_doc, device),
+            'username': account_code,
             'userid': str(user_doc.get('lv006') or '').strip(),
             'department': str(user_doc.get('lv003') or '').strip(),
             'role': str(user_doc.get('lv004') or '').strip(),
+            'right': str(user_doc.get('lv004') or '').strip(),
             'name': str(user_doc.get('lv002') or account_code).strip(),
-            'domain': self._resolve_domain(user_doc, device),
+            'domain': resolved_domain,
             'method': str(user_doc.get('lv669') or 'http').strip(),
-            'database': str(user_doc.get('lv670') or '').strip(),
+            'database': resolved_database,
+            'dbName': resolved_db_name,
+            'table': resolved_table,
             'IPv4': str(user_doc.get('lv094') or '').strip(),
             'lv006': str(user_doc.get('lv006') or '').strip(),
             'lv900': str(user_doc.get('lv900') or '').strip(),
@@ -668,6 +704,12 @@ class CouchDBDynamicAuthService:
             'system_name': route.get('system_name') or '',
             'system_note': route.get('system_note') or '',
             'welcome_message': route.get('welcome_message') or '',
+            'expireDate': str(user_doc.get('expireDate') or user_doc.get('lv705') or '').strip(),
+            'daysRemaining': user_doc.get('daysRemaining'),
+            'expireWarning': user_doc.get('expireWarning'),
+            'orderId': str(user_doc.get('orderId') or '').strip(),
+            'userCode': str(user_doc.get('userCode') or '').strip(),
+            'status': user_doc.get('status'),
         }
 
     def save_token(self, username, token, device_type='web', login_password=''):
@@ -921,12 +963,32 @@ class CouchDBDynamicAuthService:
         token_info = self.find_user_by_token(token)
         user_data = token_info.get('userData') or {}
         route = token_info.get('route') or {}
+        resolved_database = self._resolve_database(
+            user_data,
+            routed_database=token_info.get('routed_database') or '',
+        )
+        resolved_db_name = self._first_non_empty(
+            user_data.get('dbName'),
+            user_data.get('database'),
+            user_data.get('table'),
+            resolved_database,
+        )
+        resolved_table = self._first_non_empty(
+            user_data.get('table'),
+            user_data.get('dbName'),
+            user_data.get('database'),
+            resolved_database,
+        )
+
         return {
-            'database': str(user_data.get('lv670') or '').strip(),
+            'database': resolved_database,
+            'dbName': resolved_db_name,
+            'table': resolved_table,
             'IPv4': str(user_data.get('lv094') or '').strip(),
             'user': str(user_data.get('lv096') or '').strip(),
             'password': str(user_data.get('lv099') or '').strip(),
             'port': str(user_data.get('lv100') or '').strip(),
+            'domain': self._resolve_domain(user_data, token_info.get('deviceType') or 'web'),
             'username': token_info.get('username') or '',
             'deviceType': token_info.get('deviceType') or '',
             'routed_database': token_info.get('routed_database') or '',

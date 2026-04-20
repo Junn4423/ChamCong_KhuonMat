@@ -8,6 +8,7 @@ import mimetypes
 import base64
 import secrets
 import string
+import re
 import uuid
 from datetime import datetime
 from urllib import parse, request
@@ -33,6 +34,7 @@ from backend.config import (
     ERP_HTTP_DEVICE_TYPE,
     ERP_HTTP_IMAGE_COLUMN,
     ERP_HTTP_LOGIN_URL,
+    ERP_HTTP_INCLUDE_AUTH_IN_BODY,
     ERP_HTTP_TOKEN_IMAGE_MODE,
     ERP_HTTP_TOKEN_IMAGE_PROD_BASE_URL,
     ERP_HTTP_TOKEN_IMAGE_TEST_BASE_URL,
@@ -42,8 +44,11 @@ from backend.config import (
     ERP_HTTP_TOKEN_COLUMN,
     ERP_HTTP_SOF_DEV_TOKEN,
     ERP_HTTP_SERVICE_URL,
+    ERP_HTTP_SERVICE_PATH_SUFFIX,
     ERP_HTTP_TIMEOUT,
     ERP_HTTP_TYPE_CODE,
+    ERP_HTTP_TYPE_CODE_DYNAMIC,
+    ERP_HTTP_TYPE_CODE_PREFIX_MAP,
     ERP_MAIN_CONFIG,
 )
 from backend.services.couchdb_auth_service import CouchDBDynamicAuthService
@@ -51,6 +56,71 @@ from backend.services.errors import ERPServiceError
 
 
 class ERPHttpClient:
+    DEFAULT_TYPE_CODE_PREFIX_MAP = {
+        'banhang': 'BANHANG',
+        'hangquan': 'HANGQUAN',
+        'khachsan': 'KHACHSAN',
+        'erp': 'ERP',
+        'nhansu': 'NHANSU',
+        'kho': 'KHO',
+        'pallet': 'PALLET',
+        'giuxe': 'GIUXE',
+        'chamcong': 'CHAMCONG',
+    }
+
+    DEVICE_TYPE_ALIASES = {
+        'web': 'desktop',
+        'website': 'desktop',
+        'desktop': 'desktop',
+        'electron': 'desktop',
+        'pc': 'desktop',
+        'chamcongdes': 'desktop',
+        'mobile': 'mobile',
+        'app': 'mobile',
+        'chamcongapp': 'mobile',
+        'android': 'mobile',
+        'ios': 'mobile',
+    }
+
+    MD5_HASH_PATTERN = re.compile(r'^[a-f0-9]{32}$')
+
+    @staticmethod
+    def _parse_type_code_prefix_map(raw_value):
+        mapping = {}
+        for chunk in str(raw_value or '').split(','):
+            item = chunk.strip()
+            if not item:
+                continue
+
+            if ':' in item:
+                prefix, code = item.split(':', 1)
+            elif '=' in item:
+                prefix, code = item.split('=', 1)
+            else:
+                continue
+
+            prefix = prefix.strip().lower()
+            code = code.strip().upper()
+            if not prefix or not code:
+                continue
+            mapping[prefix] = code
+
+        return mapping
+
+    @classmethod
+    def _normalize_device_type(cls, value, default='desktop'):
+        raw_value = str(value or '').strip().lower()
+        if not raw_value:
+            return default
+
+        mapped = cls.DEVICE_TYPE_ALIASES.get(raw_value)
+        if mapped:
+            return mapped
+
+        if raw_value in {'mobile', 'desktop'}:
+            return raw_value
+        return default
+
     @staticmethod
     def _build_url_candidates(url, default_scheme='http'):
         text = str(url or '').strip()
@@ -92,9 +162,30 @@ class ERPHttpClient:
             return ''
         return candidates[0]
 
+    @staticmethod
+    def _normalize_service_suffix(value):
+        text = str(value or '').strip()
+        if not text:
+            text = '/chamcong/services.sof.vn/index.php'
+
+        parsed = urlparse(text)
+        if parsed.scheme or parsed.netloc:
+            text = parsed.path or ''
+
+        text = '/' + str(text or '').lstrip('/')
+        while '//' in text:
+            text = text.replace('//', '/')
+
+        lower_text = text.lower().rstrip('/')
+        if lower_text.endswith('/services.sof.vn'):
+            text = text.rstrip('/') + '/index.php'
+
+        return text
+
     def __init__(
         self,
         service_url=None,
+        service_path_suffix=None,
         login_url=None,
         timeout=None,
         image_column=None,
@@ -122,6 +213,9 @@ class ERPHttpClient:
             service_url or ERP_HTTP_SERVICE_URL,
             default_scheme='http',
         )
+        self.service_path_suffix = self._normalize_service_suffix(
+            service_path_suffix or ERP_HTTP_SERVICE_PATH_SUFFIX,
+        )
         self.login_url = self._normalize_absolute_url(
             login_url or ERP_HTTP_LOGIN_URL,
             default_scheme='http',
@@ -130,7 +224,16 @@ class ERPHttpClient:
         self.image_column = image_column or ERP_HTTP_IMAGE_COLUMN
         self.sof_dev_token = (sof_dev_token or ERP_HTTP_SOF_DEV_TOKEN or '').strip()
         self.type_code = (type_code or ERP_HTTP_TYPE_CODE or '').strip()
-        self.device_type = (device_type or ERP_HTTP_DEVICE_TYPE or 'web').strip()
+        self.type_code_dynamic = bool(ERP_HTTP_TYPE_CODE_DYNAMIC)
+        self.type_code_prefix_map = dict(self.DEFAULT_TYPE_CODE_PREFIX_MAP)
+        self.type_code_prefix_map.update(
+            self._parse_type_code_prefix_map(ERP_HTTP_TYPE_CODE_PREFIX_MAP),
+        )
+        self.device_type = self._normalize_device_type(
+            device_type or ERP_HTTP_DEVICE_TYPE or 'desktop',
+            default='desktop',
+        )
+        self.include_auth_in_body = bool(ERP_HTTP_INCLUDE_AUTH_IN_BODY)
         self.couchdb_host = (couchdb_host or ERP_COUCHDB_HOST or '').strip()
         self.couchdb_port = int(couchdb_port or ERP_COUCHDB_PORT or 5984)
         self.couchdb_db = (couchdb_db or ERP_COUCHDB_DB or '').strip()
@@ -248,10 +351,18 @@ class ERPHttpClient:
         if not username or not password:
             raise ERPServiceError('Vui long nhap tai khoan va mat khau ERP', status_code=400)
 
+        login_device_type = self._normalize_device_type(self.device_type, default='desktop')
+        login_type_code = self._resolve_type_code_for_username(username, fallback=self.type_code)
+
         gateway_response = None
         gateway_error = None
         gateway_headers = self._build_gateway_headers()
-        for request_type, attempt_payload in self._build_gateway_login_attempts(username, password):
+        for request_type, attempt_payload in self._build_gateway_login_attempts(
+            username,
+            password,
+            device_type=login_device_type,
+            type_code=login_type_code,
+        ):
             try:
                 if request_type == 'form':
                     candidate = self._post_form(
@@ -272,7 +383,13 @@ class ERPHttpClient:
             gateway_response = candidate
             normalized = self._normalize_gateway_login_response(candidate, requested_username=username)
             if normalized:
-                return self._merge_login_payload({}, normalized, token_source='gateway')
+                return self._merge_login_payload(
+                    {},
+                    normalized,
+                    token_source='gateway',
+                    device_type=login_device_type,
+                    type_code=login_type_code,
+                )
 
         # Fallback to direct CouchDB auth when gateway rejects or cannot parse token payload.
         couch_auth = None
@@ -281,20 +398,27 @@ class ERPHttpClient:
             couch_auth = self.couchdb_auth_service.authenticate_user(
                 username,
                 password,
-                device_type=self.device_type,
-                type_code=self.type_code,
+                device_type=login_device_type,
+                type_code=login_type_code,
             )
         except ERPServiceError as exc:
             couch_auth_error = exc
 
         if couch_auth:
-            merged = self._merge_login_payload(couch_auth, gateway_response or {}, token_source='couchdb_direct')
+            merged = self._merge_login_payload(
+                couch_auth,
+                gateway_response or {},
+                token_source='couchdb_direct',
+                device_type=login_device_type,
+                type_code=login_type_code,
+            )
             self._sync_couchdb_post_login(
                 username=username,
                 auth_payload=merged,
                 client_ip=client_ip,
                 client_mac=client_mac,
                 login_password=password,
+                device_type=login_device_type,
             )
             if gateway_error:
                 merged['gateway_warning'] = gateway_error.message
@@ -319,16 +443,39 @@ class ERPHttpClient:
             raise couch_auth_error
         raise ERPServiceError('Dang nhap that bai', status_code=401)
 
-    def _build_gateway_login_attempts(self, username, password):
+    def _resolve_type_code_for_username(self, username, fallback=''):
+        fallback_code = str(fallback or '').strip().upper()
+        if not self.type_code_dynamic:
+            return fallback_code
+
+        username_text = str(username or '').strip().lower()
+        if not username_text:
+            return fallback_code
+
+        prefix = username_text.split('.', 1)[0]
+        prefix = ''.join(ch for ch in prefix if ch.isalnum() or ch in {'_', '-'})
+        if not prefix:
+            return fallback_code
+
+        for key in sorted(self.type_code_prefix_map.keys(), key=len, reverse=True):
+            if prefix == key or prefix.startswith(key):
+                return self.type_code_prefix_map[key]
+
+        return fallback_code
+
+    def _build_gateway_login_attempts(self, username, password, device_type='', type_code=''):
+        login_device_type = self._normalize_device_type(device_type or self.device_type, default='desktop')
+        login_type_code = str(type_code or self.type_code or '').strip().upper()
+
         modern_payload = {
             'method': 'loginUser',
             'username': username,
             'password': password,
         }
-        if self.device_type:
-            modern_payload['deviceType'] = self.device_type
-        if self.type_code:
-            modern_payload['TYPE-SOF-CODE'] = self.type_code
+        if login_device_type:
+            modern_payload['deviceType'] = login_device_type
+        if login_type_code:
+            modern_payload['TYPE-SOF-CODE'] = login_type_code
 
         modern_base_payload = {
             'method': 'loginUser',
@@ -340,10 +487,10 @@ class ERPHttpClient:
             'txtUserName': username,
             'txtPassword': password,
         }
-        if self.device_type:
-            legacy_payload['txtDeviceType'] = self.device_type
-        if self.type_code:
-            legacy_payload['txtTypeCode'] = self.type_code
+        if login_device_type:
+            legacy_payload['txtDeviceType'] = login_device_type
+        if login_type_code:
+            legacy_payload['txtTypeCode'] = login_type_code
 
         legacy_base_payload = {
             'txtUserName': username,
@@ -428,7 +575,15 @@ class ERPHttpClient:
         alphabet = string.ascii_letters + string.digits
         return ''.join(secrets.choice(alphabet) for _ in range(max(8, int(length))))
 
-    def _sync_couchdb_post_login(self, username, auth_payload, client_ip='', client_mac='', login_password=''):
+    def _sync_couchdb_post_login(
+        self,
+        username,
+        auth_payload,
+        client_ip='',
+        client_mac='',
+        login_password='',
+        device_type='',
+    ):
         if not isinstance(auth_payload, dict):
             return
 
@@ -436,12 +591,17 @@ class ERPHttpClient:
         if not token:
             return
 
+        resolved_device_type = self._normalize_device_type(
+            device_type or self.device_type,
+            default='desktop',
+        )
+
         sync_warnings = []
         try:
             self.couchdb_auth_service.save_token(
                 username=username,
                 token=token,
-                device_type=self.device_type,
+                device_type=resolved_device_type,
                 login_password=login_password,
             )
         except ERPServiceError as exc:
@@ -451,7 +611,7 @@ class ERPHttpClient:
             self.couchdb_auth_service.write_auth_log(
                 username=username,
                 status=0,
-                device_type=self.device_type,
+                device_type=resolved_device_type,
                 token=token,
                 ip=client_ip,
                 mac=client_mac,
@@ -468,7 +628,10 @@ class ERPHttpClient:
         if not username:
             return
 
-        device_type = str(auth.get('device_type') or self.device_type or 'web').strip().lower()
+        device_type = self._normalize_device_type(
+            auth.get('device_type') or self.device_type,
+            default='desktop',
+        )
         token = str(auth.get('token') or '').strip()
 
         try:
@@ -491,26 +654,36 @@ class ERPHttpClient:
         except ERPServiceError:
             pass
 
-    def _merge_login_payload(self, couch_auth, response, token_source):
+    def _merge_login_payload(self, couch_auth, response, token_source, device_type='', type_code=''):
         merged = dict(couch_auth or {})
         response = response if isinstance(response, dict) else {}
 
         for key in (
             'code',
             'token',
+            'username',
             'userid',
             'department',
             'role',
+            'right',
             'name',
             'domain',
             'method',
             'database',
+            'dbName',
+            'table',
             'IPv4',
             'lv006',
             'lv900',
             'lv705',
             'lv667',
             'lv040',
+            'expireDate',
+            'daysRemaining',
+            'expireWarning',
+            'orderId',
+            'userCode',
+            'status',
             'quota_exceeded',
             'quota_message',
             'storage_info',
@@ -527,8 +700,25 @@ class ERPHttpClient:
 
         merged['code'] = (merged.get('code') or '').strip()
         merged['token'] = (merged.get('token') or '').strip() or self._generate_local_token(32)
-        merged['device_type'] = self.device_type
-        merged['type_code'] = self.type_code
+        merged_database = self._pick_auth_value(merged, 'database', 'dbName', 'table')
+        if merged_database:
+            merged['database'] = merged_database
+
+        if not self._pick_auth_value(merged, 'dbName') and merged_database:
+            merged['dbName'] = merged_database
+
+        if not self._pick_auth_value(merged, 'table') and merged_database:
+            merged['table'] = merged_database
+
+        resolved_username = self._pick_auth_value(merged, 'code', 'username', 'userCode')
+        merged['device_type'] = self._normalize_device_type(
+            device_type or merged.get('device_type') or self.device_type,
+            default='desktop',
+        )
+        merged['type_code'] = self._resolve_type_code_for_username(
+            resolved_username,
+            fallback=(type_code or merged.get('type_code') or self.type_code),
+        )
         merged['token_source'] = token_source
         merged['quota_exceeded'] = bool(merged.get('quota_exceeded', False))
         if not isinstance(merged.get('storage_info'), dict):
@@ -571,6 +761,121 @@ class ERPHttpClient:
             raise errors[-1]
 
         return employees
+
+    @classmethod
+    def _normalize_md5_hash(cls, value):
+        token = str(value or '').strip().lower()
+        if cls.MD5_HASH_PATTERN.fullmatch(token):
+            return token
+        return ''
+
+    def _map_employee_credential_item(self, item, fallback_employee_id=''):
+        if not isinstance(item, dict):
+            return None
+
+        employee_id = (
+            str(item.get('employee_id') or item.get('maNhanVien') or item.get('lv001') or fallback_employee_id or '')
+            .strip()
+        )
+        if not employee_id:
+            return None
+
+        username = str(item.get('username') or item.get('taiKhoan') or item.get('lv001') or employee_id).strip()
+        password_hash_md5 = self._normalize_md5_hash(
+            item.get('password_hash_md5')
+            or item.get('password_hash')
+            or item.get('lv200')
+            or item.get('matKhau')
+            or ''
+        )
+
+        return {
+            'employee_id': employee_id,
+            'username': username,
+            'password_hash_md5': password_hash_md5,
+            'has_password_hash': bool(password_hash_md5),
+        }
+
+    def _get_employee_credential_by_id(self, auth, employee_id):
+        payload = self._build_auth_payload(
+            auth,
+            table='hr_lv0020',
+            func='layNhanVienTheoMa',
+            maNhanVien=employee_id,
+        )
+        response = self._post_json(
+            self._resolve_service_url(auth),
+            payload,
+            headers=self._build_service_headers(auth),
+        )
+        if self._is_invalid_session_response(response):
+            raise ERPServiceError(
+                'Phien lam viec ERP da het han, vui long dang nhap lai',
+                status_code=401,
+                payload=response,
+            )
+
+        service_error = self._extract_service_error(response)
+        if service_error:
+            raise ERPServiceError(service_error, status_code=502, payload=response)
+
+        for item in self._extract_list(response):
+            mapped = self._map_employee_credential_item(item, fallback_employee_id=employee_id)
+            if mapped:
+                return mapped
+
+        return None
+
+    def list_employee_credentials(self, auth, employee_ids=None):
+        normalized_ids = []
+        if isinstance(employee_ids, (list, tuple, set)):
+            for item in employee_ids:
+                employee_id = str(item or '').strip()
+                if employee_id and employee_id not in normalized_ids:
+                    normalized_ids.append(employee_id)
+
+        selected_upper = {employee_id.upper() for employee_id in normalized_ids}
+
+        payload = self._build_auth_payload(auth, table='hr_lv0020', func='LayNhanVien')
+        response = self._post_json(
+            self._resolve_service_url(auth),
+            payload,
+            headers=self._build_service_headers(auth),
+        )
+
+        if self._is_invalid_session_response(response):
+            raise ERPServiceError(
+                'Phien lam viec ERP da het han, vui long dang nhap lai',
+                status_code=401,
+                payload=response,
+            )
+
+        service_error = self._extract_service_error(response)
+        if service_error:
+            raise ERPServiceError(service_error, status_code=502, payload=response)
+
+        credentials = []
+        seen_ids = set()
+        for item in self._extract_list(response):
+            mapped = self._map_employee_credential_item(item)
+            if not mapped:
+                continue
+
+            employee_id = mapped['employee_id']
+            if selected_upper and employee_id.upper() not in selected_upper:
+                continue
+
+            credentials.append(mapped)
+            seen_ids.add(employee_id.upper())
+
+        if normalized_ids:
+            missing_ids = [employee_id for employee_id in normalized_ids if employee_id.upper() not in seen_ids]
+            for employee_id in missing_ids:
+                mapped = self._get_employee_credential_by_id(auth, employee_id)
+                if mapped:
+                    credentials.append(mapped)
+
+        return credentials
 
     def get_employee(self, auth, employee_id):
         employee_id = (employee_id or '').strip()
@@ -1349,20 +1654,17 @@ class ERPHttpClient:
         token = (auth.get('token') or '').strip()
         if not code or not token:
             raise ERPServiceError('Phien lam viec ERP da het han, vui long dang nhap lai', status_code=401)
-        return {
-            **extra,
-            'code': code,
-            'token': token,
-        }
+
+        payload = dict(extra)
+        if self.include_auth_in_body:
+            payload['code'] = code
+            payload['token'] = token
+        return payload
 
     def _build_gateway_headers(self):
-        headers = {
-            'Accept': 'application/json',
-            'X-DEVICE-TYPE': self.device_type,
-        }
+        headers = {'Accept': 'application/json'}
         if self.sof_dev_token:
             headers['X-SOF-USER-TOKEN'] = self.sof_dev_token
-            headers['SOF-User-Token'] = self.sof_dev_token
         return headers
 
     def _build_token_register_headers(self, username='', user_token='', admin_token=''):
@@ -1416,16 +1718,31 @@ class ERPHttpClient:
         if not candidate:
             return self.service_url
 
-        candidate = candidate.rstrip('/')
-        lower_candidate = candidate.lower()
-        if lower_candidate.endswith('/services.sof.vn/index.php'):
-            return candidate
-        if lower_candidate.endswith('/services.sof.vn'):
-            return f'{candidate}/index.php'
-        if lower_candidate.endswith('/index.php'):
-            return candidate
+        parsed = urlparse(candidate)
+        if not parsed.scheme or not parsed.netloc:
+            return self.service_url
 
-        return f'{candidate}/services.sof.vn/index.php'
+        base_url = f'{parsed.scheme}://{parsed.netloc}'
+        raw_path = (parsed.path or '').strip()
+        if not raw_path:
+            return f'{base_url}{self.service_path_suffix}'
+
+        normalized_path = '/' + raw_path.lstrip('/')
+        trimmed_path = normalized_path.rstrip('/')
+        lower_trimmed_path = trimmed_path.lower()
+
+        if lower_trimmed_path.endswith('/services.sof.vn/index.php'):
+            return f'{base_url}{trimmed_path}'
+
+        if lower_trimmed_path.endswith('/services.sof.vn'):
+            return f'{base_url}{trimmed_path}/index.php'
+
+        if '/chamcong' in lower_trimmed_path:
+            chamcong_idx = lower_trimmed_path.find('/chamcong')
+            chamcong_path = trimmed_path[:chamcong_idx + len('/chamcong')]
+            return f'{base_url}{chamcong_path}/services.sof.vn/index.php'
+
+        return f'{base_url}{self.service_path_suffix}'
 
     def _build_service_headers(self, auth):
         auth = auth or {}
@@ -1435,20 +1752,11 @@ class ERPHttpClient:
         if user_token:
             headers['X-USER-TOKEN'] = user_token
 
-        database = self._pick_auth_value(auth, 'database')
-        if database:
-            headers['X-DATABASE'] = database
-
-        server_ip = self._pick_auth_value(auth, 'IPv4', 'server_ip')
-        if server_ip:
-            headers['X-SERVER-IP'] = server_ip
-
         user_code = self._pick_auth_value(auth, 'code')
         if user_code:
-            headers['X-USER-CODE'] = user_code
             headers['X-USER-USERNAME'] = user_code
 
-        user_role = self._pick_auth_value(auth, 'role')
+        user_role = self._pick_auth_value(auth, 'right', 'role')
         if user_role:
             headers['X-USER-RIGHT'] = user_role
 
@@ -1767,9 +2075,31 @@ class ERPHttpClient:
         raise ERPServiceError('Khong the ket noi ERP service')
 
     def _parse_json(self, raw):
+        text = raw.decode('utf-8-sig', errors='ignore').strip()
+        if not text:
+            raise ERPServiceError('ERP tra ve JSON khong hop le')
+
         try:
-            return json.loads(raw.decode('utf-8-sig'))
+            return json.loads(text)
         except json.JSONDecodeError as exc:
+            lines = [line.strip() for line in text.splitlines() if line.strip()]
+            for candidate in reversed(lines):
+                try:
+                    return json.loads(candidate)
+                except json.JSONDecodeError:
+                    continue
+
+            decoder = json.JSONDecoder()
+            for index, ch in enumerate(text):
+                if ch not in '{[':
+                    continue
+                try:
+                    parsed, end_idx = decoder.raw_decode(text[index:])
+                except ValueError:
+                    continue
+                if not text[index + end_idx:].strip():
+                    return parsed
+
             raise ERPServiceError('ERP tra ve JSON khong hop le') from exc
 
 

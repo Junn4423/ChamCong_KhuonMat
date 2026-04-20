@@ -29,11 +29,27 @@ def _get_profiled_int(name, default):
     except (TypeError, ValueError):
         return int(default)
 
+
+def _to_bool(value, default=False):
+    if value is None:
+        return bool(default)
+
+    text = str(value).strip().lower()
+    if text in {'1', 'true', 'yes', 'on'}:
+        return True
+    if text in {'0', 'false', 'no', 'off'}:
+        return False
+    return bool(default)
+
 ERP_FETCH_MODE = os.getenv('ERP_FETCH_MODE', 'http_service').lower()
 ERP_HTTP_SERVICE_URL = _get_profiled_env(
     'ERP_HTTP_SERVICE_URL',
     'http://192.168.1.20/erpdung-hao/services/erpv1/services.sof.vn/index.php',
 )
+ERP_HTTP_SERVICE_PATH_SUFFIX = _get_profiled_env(
+    'ERP_HTTP_SERVICE_PATH_SUFFIX',
+    '/chamcong/services.sof.vn/index.php',
+).strip()
 ERP_HTTP_LOGIN_URL = _get_profiled_env(
     'ERP_HTTP_LOGIN_URL',
     'http://192.168.1.20/erpdung-hao/services/erpv1/login.sof.vn/login.sof.vn/index.php',
@@ -67,7 +83,10 @@ ERP_HTTP_SOF_DEV_TOKEN = _get_profiled_env(
     '34234324324sdfsfofsehweorio32432432sfshh3effds2343243244',
 )
 ERP_HTTP_TYPE_CODE = _get_profiled_env('ERP_HTTP_TYPE_CODE', 'CHAMCONG')
+ERP_HTTP_TYPE_CODE_DYNAMIC = _to_bool(_get_profiled_env('ERP_HTTP_TYPE_CODE_DYNAMIC', 'true'), default=True)
+ERP_HTTP_TYPE_CODE_PREFIX_MAP = _get_profiled_env('ERP_HTTP_TYPE_CODE_PREFIX_MAP', '').strip()
 ERP_HTTP_DEVICE_TYPE = _get_profiled_env('ERP_HTTP_DEVICE_TYPE', 'web')
+ERP_HTTP_INCLUDE_AUTH_IN_BODY = _to_bool(_get_profiled_env('ERP_HTTP_INCLUDE_AUTH_IN_BODY', 'false'), default=False)
 ERP_COUCHDB_HOST = _get_profiled_env('ERP_COUCHDB_HOST', '192.168.1.20')
 ERP_COUCHDB_PORT = _get_profiled_int('ERP_COUCHDB_PORT', 5984)
 ERP_COUCHDB_DB = _get_profiled_env('ERP_COUCHDB_DB', 'couchdb')

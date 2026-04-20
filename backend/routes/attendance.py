@@ -31,6 +31,7 @@ from backend.runtime import ensure_data_dir, ensure_db_path
 from backend.routes._state import state
 from backend.routes._helpers import (
     admin_required,
+    employee_required,
     parse_location_payload, location_to_text,
     get_runtime_location, save_attendance_location,
     serialize_attendance_location,
@@ -83,6 +84,15 @@ def _serialize_attendance_user(user):
         'department': user.department,
         'position': user.position,
     }
+
+
+def _distance_to_similarity_percent(distance):
+    try:
+        score = 1.0 - float(distance)
+    except (TypeError, ValueError):
+        return None
+    score = max(0.0, min(1.0, score))
+    return round(score * 100.0, 2)
 
 
 def _parse_cooldown_seconds(value, default_seconds=DEFAULT_ATTENDANCE_COOLDOWN_SECONDS):
@@ -402,6 +412,7 @@ def _apply_attendance_action(
 
 
 @attendance_bp.route('/api/check_attendance', methods=['POST'])
+@admin_required
 def check_attendance():
     try:
         data = request.get_json(silent=True) or {}
@@ -471,6 +482,7 @@ def check_attendance():
 
 
 @attendance_bp.route('/api/attendance_image', methods=['POST'])
+@admin_required
 def attendance_image():
     try:
         attendance_code = None
@@ -657,7 +669,376 @@ def attendance_image():
         return jsonify({'success': False, 'message': str(e)}), 500
 
 
+@attendance_bp.route('/api/employee/attendance_image', methods=['POST'])
+@employee_required
+def employee_attendance_image():
+    try:
+        attendance_code = None
+        request_location = None
+        attendance_type = 'checkin'
+        attendance_cooldown_seconds = get_attendance_cooldown_seconds()
+
+        image_bytes = b''
+        if 'image' in request.files:
+            image_file = request.files['image']
+            attendance_code = request.form.get('attendance_code')
+            attendance_type = _normalize_attendance_type(request.form.get('attendance_type'))
+            request_location = parse_location_payload({
+                'latitude': request.form.get('latitude'),
+                'longitude': request.form.get('longitude'),
+                'accuracy': request.form.get('accuracy'),
+                'label': request.form.get('location_label') or request.form.get('location'),
+                'provider': request.form.get('location_provider'),
+            })
+
+            image_bytes = image_file.read() or b''
+            if not image_bytes:
+                return jsonify({'success': False, 'message': 'Thiếu ảnh'}), 400
+
+            with state.face_recognition_lock:
+                face_encoding, error = state.face_recognizer.encode_face_from_image(io.BytesIO(image_bytes))
+        else:
+            data = request.get_json(silent=True) or {}
+            image_base64 = data.get('image_base64')
+            if not image_base64:
+                return jsonify({'success': False, 'message': 'Thiếu ảnh'}), 400
+
+            attendance_code = data.get('attendance_code')
+            attendance_type = _normalize_attendance_type(data.get('attendance_type'))
+            request_location = parse_location_payload(data)
+
+            raw_base64 = image_base64.split(',', 1)[1] if ',' in image_base64 else image_base64
+            try:
+                image_bytes = base64.b64decode(raw_base64)
+            except Exception:
+                return jsonify({'success': False, 'message': 'Dữ liệu ảnh base64 không hợp lệ'}), 400
+
+            with state.face_recognition_lock:
+                face_encoding, error = state.face_recognizer.encode_face_from_base64(image_base64)
+
+        attendance_mode = get_attendance_mode()
+        if attendance_mode == 'auto_record':
+            attendance_type = 'auto'
+        elif attendance_type == 'auto':
+            attendance_type = 'checkin'
+
+        if error:
+            return jsonify({'success': False, 'message': error}), 400
+
+        with state.face_recognition_lock:
+            matches = state.face_recognizer.compare_faces(
+                state.face_recognizer.known_face_encodings,
+                face_encoding,
+                tolerance=0.5,
+            )
+            face_distances = state.face_recognizer.compute_distance(
+                state.face_recognizer.known_face_encodings,
+                face_encoding,
+            )
+
+        if len(face_distances) == 0:
+            return jsonify({
+                'success': False,
+                'message': 'Không nhận diện được nhân viên',
+                'similarity_percent': 0,
+                'mismatch': False,
+            }), 404
+
+        best_match_index = int(np.argmin(face_distances))
+        best_distance = float(face_distances[best_match_index])
+        similarity_percent = _distance_to_similarity_percent(best_distance) or 0
+
+        if not any(matches) or not matches[best_match_index]:
+            return jsonify({
+                'success': False,
+                'message': 'Không nhận diện được nhân viên',
+                'similarity_percent': similarity_percent,
+                'mismatch': False,
+            }), 404
+
+        matched_user_id = state.face_recognizer.known_face_ids[best_match_index]
+        matched_user = User.query.get(matched_user_id)
+        if not matched_user:
+            return jsonify({'success': False, 'message': 'Không tìm thấy nhân viên'}), 404
+
+        employee_user = getattr(g, 'employee_user', None)
+        if employee_user is None:
+            return jsonify({'success': False, 'message': 'Phiên đăng nhập không hợp lệ'}), 401
+
+        image = cv2.imdecode(np.frombuffer(image_bytes, dtype=np.uint8), cv2.IMREAD_COLOR)
+        if image is None:
+            pil_img = PILImage.open(io.BytesIO(image_bytes))
+            if pil_img.mode != 'RGB':
+                pil_img = pil_img.convert('RGB')
+            image = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
+
+        with state.face_recognition_lock:
+            detect_results = state.face_recognizer.engine.detect_and_encode(image)
+
+        if len(detect_results) == 0:
+            return jsonify({'success': False, 'message': 'Không tìm thấy khuôn mặt'}), 400
+
+        bbox = detect_results[0].get('bbox')
+        if bbox is None or len(bbox) < 4:
+            return jsonify({'success': False, 'message': 'Không xác định được vùng khuôn mặt'}), 400
+
+        bbox_xywh = [bbox[0], bbox[1], bbox[2] - bbox[0], bbox[3] - bbox[1]]
+        is_real, spoof_score = state.face_recognizer.engine.check_anti_spoofing(image, bbox_xywh)
+        if not is_real:
+            return jsonify({
+                'success': False,
+                'message': 'Phát hiện khuôn mặt giả mạo!',
+                'similarity_percent': similarity_percent,
+                'mismatch': False,
+                'spoof_score': float(spoof_score),
+            }), 400
+
+        if matched_user.id != employee_user.id:
+            return jsonify({
+                'success': False,
+                'message': (
+                    f'Khuôn mặt được nhận diện là {matched_user.name} '
+                    f'({matched_user.employee_id}), không khớp tài khoản đang đăng nhập'
+                ),
+                'mismatch': True,
+                'similarity_percent': similarity_percent,
+                'expected_user': _serialize_attendance_user(employee_user),
+                'detected_user': _serialize_attendance_user(matched_user),
+            }), 409
+
+        action_result = _apply_attendance_action(
+            user=employee_user,
+            attendance_type=attendance_type,
+            request_location=request_location,
+            attendance_code=attendance_code,
+            erp_auth=None,
+            cooldown_seconds=attendance_cooldown_seconds,
+        )
+        if not action_result.get('ok'):
+            return jsonify({
+                'success': False,
+                'message': action_result.get('message') or 'Không thể chấm công',
+                'cooldown_remaining_seconds': int(action_result.get('cooldown_remaining_seconds') or 0),
+                'similarity_percent': similarity_percent,
+                'mismatch': False,
+                'user': _serialize_attendance_user(employee_user),
+            }), int(action_result.get('status_code') or 400)
+
+        attendance_row = action_result.get('attendance')
+        location_bundle = serialize_attendance_locations(attendance_row.id) if attendance_row else {}
+
+        return jsonify({
+            'success': True,
+            'message': action_result.get('message') or f'Điểm danh thành công cho {employee_user.name}',
+            'user': _serialize_attendance_user(employee_user),
+            'status': attendance_row.status if attendance_row else '',
+            'attendance_type': action_result.get('attendance_type') or attendance_type,
+            'attendance_type_label': _attendance_type_label(action_result.get('attendance_type') or attendance_type),
+            'check_in_time': attendance_row.check_in_time.strftime('%H:%M:%S') if attendance_row and attendance_row.check_in_time else '',
+            'check_out_time': attendance_row.check_out_time.strftime('%H:%M:%S') if attendance_row and attendance_row.check_out_time else '',
+            'location': action_result.get('location'),
+            'location_text': action_result.get('location_text') or '',
+            'check_in_location_text': ((location_bundle or {}).get('checkin') or {}).get('text', ''),
+            'check_out_location_text': ((location_bundle or {}).get('checkout') or {}).get('text', ''),
+            'similarity_percent': similarity_percent,
+            'mismatch': False,
+        })
+    except Exception as exc:
+        return jsonify({'success': False, 'message': str(exc)}), 500
+
+
+@attendance_bp.route('/api/employee/attendance_detect', methods=['POST'])
+@employee_required
+def employee_attendance_detect():
+    try:
+        data = request.get_json(silent=True) or {}
+        image_base64 = data.get('image_base64')
+        if not image_base64:
+            return jsonify({'success': False, 'message': 'Thiếu ảnh'}), 400
+
+        raw_base64 = image_base64.split(',', 1)[1] if ',' in image_base64 else image_base64
+        try:
+            image_bytes = base64.b64decode(raw_base64)
+        except Exception:
+            return jsonify({'success': False, 'message': 'Dữ liệu ảnh base64 không hợp lệ'}), 400
+        pil_img = PILImage.open(io.BytesIO(image_bytes))
+        if pil_img.mode != 'RGB':
+            pil_img = pil_img.convert('RGB')
+        image = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
+
+        if image is None or image.size == 0:
+            return jsonify({'success': False, 'message': 'Không đọc được dữ liệu ảnh'}), 400
+
+        with state.face_recognition_lock:
+            results = state.face_recognizer.engine.detect_and_encode(image)
+
+            if not results:
+                return jsonify({
+                    'success': True,
+                    'detected': False,
+                    'matched': False,
+                    'mismatch': False,
+                    'similarity_percent': 0,
+                    'expected_user': _serialize_attendance_user(getattr(g, 'employee_user', None)),
+                    'detected_user': None,
+                })
+
+            embedding = results[0].get('embedding')
+            if embedding is None:
+                return jsonify({
+                    'success': True,
+                    'detected': True,
+                    'matched': False,
+                    'mismatch': False,
+                    'similarity_percent': 0,
+                    'expected_user': _serialize_attendance_user(getattr(g, 'employee_user', None)),
+                    'detected_user': None,
+                })
+
+            matches = state.face_recognizer.compare_faces(
+                state.face_recognizer.known_face_encodings,
+                embedding,
+                tolerance=0.5,
+            )
+            distances = state.face_recognizer.compute_distance(
+                state.face_recognizer.known_face_encodings,
+                embedding,
+            )
+
+        if len(distances) == 0:
+            return jsonify({
+                'success': True,
+                'detected': True,
+                'matched': False,
+                'mismatch': False,
+                'similarity_percent': 0,
+                'expected_user': _serialize_attendance_user(getattr(g, 'employee_user', None)),
+                'detected_user': None,
+            })
+
+        best_idx = int(np.argmin(distances))
+        similarity_percent = _distance_to_similarity_percent(float(distances[best_idx])) or 0
+        matched = bool(any(matches) and matches[best_idx])
+
+        detected_user = None
+        mismatch = False
+        if matched:
+            detected_user_id = state.face_recognizer.known_face_ids[best_idx]
+            detected_user = User.query.get(detected_user_id)
+            employee_user = getattr(g, 'employee_user', None)
+            mismatch = bool(detected_user and employee_user and detected_user.id != employee_user.id)
+
+        return jsonify({
+            'success': True,
+            'detected': True,
+            'matched': matched,
+            'mismatch': mismatch,
+            'similarity_percent': similarity_percent,
+            'expected_user': _serialize_attendance_user(getattr(g, 'employee_user', None)),
+            'detected_user': _serialize_attendance_user(detected_user) if detected_user else None,
+        })
+    except Exception as exc:
+        return jsonify({'success': False, 'message': str(exc)}), 500
+
+
+@attendance_bp.route('/api/employee/attendance/history')
+@employee_required
+def employee_attendance_history():
+    employee_user = getattr(g, 'employee_user', None)
+    if employee_user is None:
+        return jsonify({'success': False, 'message': 'Phiên đăng nhập không hợp lệ', 'records': []}), 401
+
+    date_raw = str(request.args.get('date') or '').strip()
+    start_date_raw = str(request.args.get('start_date') or '').strip()
+    end_date_raw = str(request.args.get('end_date') or '').strip()
+
+    date_filter = None
+    start_date = None
+    end_date = None
+    try:
+        if date_raw:
+            date_filter = datetime.strptime(date_raw, '%Y-%m-%d').date()
+        if start_date_raw:
+            start_date = datetime.strptime(start_date_raw, '%Y-%m-%d').date()
+        if end_date_raw:
+            end_date = datetime.strptime(end_date_raw, '%Y-%m-%d').date()
+    except ValueError:
+        return jsonify({
+            'success': False,
+            'message': 'Định dạng ngày không hợp lệ (YYYY-MM-DD)',
+            'records': [],
+        }), 400
+
+    try:
+        limit_raw = int(request.args.get('limit') or 50)
+    except (TypeError, ValueError):
+        limit_raw = 50
+    limit = max(1, min(limit_raw, 300))
+
+    query = Attendance.query.filter_by(user_id=employee_user.id)
+    if date_filter is not None:
+        query = query.filter(Attendance.date == date_filter)
+    else:
+        if start_date is not None:
+            query = query.filter(Attendance.date >= start_date)
+        if end_date is not None:
+            query = query.filter(Attendance.date <= end_date)
+
+    rows = (
+        query
+        .order_by(Attendance.date.desc(), Attendance.check_in_time.desc())
+        .limit(limit)
+        .all()
+    )
+
+    records = []
+    for row in rows:
+        location_bundle = serialize_attendance_locations(row.id)
+        checkin_location_payload = (location_bundle or {}).get('checkin')
+        checkout_location_payload = (location_bundle or {}).get('checkout')
+
+        if row.check_out_time:
+            status_text = 'Đã Checkout'
+        else:
+            status_text = 'Đúng giờ' if row.status == 'present' else ('Trễ' if row.status == 'late' else row.status)
+
+        records.append({
+            'id': row.id,
+            'date': row.date.strftime('%Y-%m-%d') if row.date else '',
+            'check_in_time': row.check_in_time.strftime('%H:%M:%S') if row.check_in_time else '',
+            'check_out_time': row.check_out_time.strftime('%H:%M:%S') if row.check_out_time else '',
+            'status': status_text,
+            'check_in_location_text': (checkin_location_payload or {}).get('text', ''),
+            'check_out_location_text': (checkout_location_payload or {}).get('text', ''),
+        })
+
+    return jsonify({
+        'success': True,
+        'employee': _serialize_attendance_user(employee_user),
+        'records': records,
+        'filters': {
+            'date': date_filter.strftime('%Y-%m-%d') if date_filter else '',
+            'start_date': start_date.strftime('%Y-%m-%d') if start_date else '',
+            'end_date': end_date.strftime('%Y-%m-%d') if end_date else '',
+            'limit': limit,
+        },
+    })
+
+
+@attendance_bp.route('/api/employee/attendance_settings')
+@employee_required
+def employee_attendance_settings():
+    return jsonify({
+        'success': True,
+        'attendance_settings': {
+            'mode': get_attendance_mode(),
+            'cooldown_seconds': get_attendance_cooldown_seconds(),
+        },
+    })
+
+
 @attendance_bp.route('/api/attendance_detect', methods=['POST'])
+@admin_required
 def attendance_detect():
     try:
         data = request.get_json(silent=True) or {}
@@ -833,6 +1214,7 @@ def get_system_storage_stats():
 
 
 @attendance_bp.route('/api/get_attendance_stats')
+@admin_required
 def get_attendance_stats():
     try:
         today = date.today()
@@ -865,6 +1247,7 @@ def get_attendance_stats():
 
 
 @attendance_bp.route('/api/get_recent_activity')
+@admin_required
 def get_recent_activity():
     try:
         records = (
@@ -888,6 +1271,7 @@ def get_recent_activity():
 
 
 @attendance_bp.route('/api/get_today_attendance')
+@admin_required
 def get_today_attendance():
     try:
         today = date.today()
