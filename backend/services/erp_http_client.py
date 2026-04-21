@@ -16,6 +16,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urljoin, urlparse
 
 from backend.config import (
+    ERP_ENV_PROFILE,
     ERP_COUCHDB_DB,
     ERP_COUCHDB_DISPATCHER_DB,
     ERP_COUCHDB_FALLBACK_DISPATCHER_DB,
@@ -166,7 +167,7 @@ class ERPHttpClient:
     def _normalize_service_suffix(value):
         text = str(value or '').strip()
         if not text:
-            text = '/chamcong/services.sof.vn/index.php'
+            text = '/services.sof.vn/index.php'
 
         parsed = urlparse(text)
         if parsed.scheme or parsed.netloc:
@@ -1724,8 +1725,31 @@ class ERPHttpClient:
 
         base_url = f'{parsed.scheme}://{parsed.netloc}'
         raw_path = (parsed.path or '').strip()
-        if not raw_path:
+
+        # Keep legacy DEV behavior, but use direct /services path in PROD.
+        if str(ERP_ENV_PROFILE or '').upper() != 'PROD':
+            if not raw_path:
+                return f'{base_url}{self.service_path_suffix}'
+
+            normalized_path = '/' + raw_path.lstrip('/')
+            trimmed_path = normalized_path.rstrip('/')
+            lower_trimmed_path = trimmed_path.lower()
+
+            if lower_trimmed_path.endswith('/services.sof.vn/index.php'):
+                return f'{base_url}{trimmed_path}'
+
+            if lower_trimmed_path.endswith('/services.sof.vn'):
+                return f'{base_url}{trimmed_path}/index.php'
+
+            if '/chamcong' in lower_trimmed_path:
+                chamcong_idx = lower_trimmed_path.find('/chamcong')
+                chamcong_path = trimmed_path[:chamcong_idx + len('/chamcong')]
+                return f'{base_url}{chamcong_path}/services.sof.vn/index.php'
+
             return f'{base_url}{self.service_path_suffix}'
+
+        if not raw_path:
+            return f'{base_url}/services.sof.vn/index.php'
 
         normalized_path = '/' + raw_path.lstrip('/')
         trimmed_path = normalized_path.rstrip('/')
@@ -1737,12 +1761,9 @@ class ERPHttpClient:
         if lower_trimmed_path.endswith('/services.sof.vn'):
             return f'{base_url}{trimmed_path}/index.php'
 
-        if '/chamcong' in lower_trimmed_path:
-            chamcong_idx = lower_trimmed_path.find('/chamcong')
-            chamcong_path = trimmed_path[:chamcong_idx + len('/chamcong')]
-            return f'{base_url}{chamcong_path}/services.sof.vn/index.php'
-
-        return f'{base_url}{self.service_path_suffix}'
+        # PROD login now returns a base domain (or host with unrelated path).
+        # Service API should be called directly at /services.sof.vn/index.php.
+        return f'{base_url}/services.sof.vn/index.php'
 
     def _build_service_headers(self, auth):
         auth = auth or {}

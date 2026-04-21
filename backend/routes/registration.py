@@ -79,7 +79,7 @@ def api_register():
         state.load_known_faces()
         return jsonify({
             'success': True,
-            'message': '??ng k? th?nh c?ng',
+            'message': 'Đăng ký thành công',
             'erp_image_token': erp_image_token,
         })
     except ERPServiceError as exc:
@@ -140,7 +140,7 @@ def api_register_base64():
         state.load_known_faces()
         return jsonify({
             'success': True,
-            'message': '??ng k? th?nh c?ng',
+            'message': 'Đăng ký thành công',
             'erp_image_token': erp_image_token,
         })
     except ERPServiceError as exc:
@@ -178,13 +178,13 @@ def register_from_erp():
     if not image_blob:
         return jsonify({
             'success': False,
-            'message': 'Nh?n vi?n ch?a c? ?nh khu?n m?t tr?n ERP. Vui l?ng t?i ?nh l?n tr??c khi ??ng k?',
+            'message': 'Nhân viên chưa có ảnh khuôn mặt trên ERP. Vui lòng tải ảnh lên trước khi đăng ký.',
         }), 400
 
     with state.face_recognition_lock:
         face_encoding, error = state.face_recognizer.encode_face_from_image(io.BytesIO(image_blob))
     if error:
-        return jsonify({'success': False, 'message': f'L?i nh?n di?n khu?n m?t: {error}'}), 400
+        return jsonify({'success': False, 'message': f'Lỗi nhận diện khuôn mặt : {error}'}), 400
 
     face_encoding_value = normalize_face_encodings(face_encoding)
     try:
@@ -227,15 +227,15 @@ def register_from_erp():
             **emp,
             'registered': True,
             'has_face': bool(face_encoding_value),
-            'status_text': '?? ??ng k? khu?n m?t' if face_encoding_value else '?? ??ng k? (ch?a c? khu?n m?t)',
+            'status_text': 'Đã đăng ký khuôn mặt' if face_encoding_value else 'Đã đăng ký (chưa có khuôn mặt)',
             'image_token': erp_image_token,
         }
         return jsonify({
             'success': True,
-            'message': '??ng k? th?nh c?ng',
+            'message': 'Đăng ký thành công',
             'employee': employee_payload,
             'erp_image_token': erp_image_token,
         })
     except Exception as exc:
         db.session.rollback()
-        return jsonify({'success': False, 'message': f'L?i l?u: {exc}'}), 500
+        return jsonify({'success': False, 'message': f'Lỗi lưu: {exc}'}), 500

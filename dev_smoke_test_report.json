@@ -1,0 +1,144 @@
+{
+  "executed_at": "2026-04-21 09:29:17",
+  "target": "DEV",
+  "host": "192.168.1.20",
+  "selected_login_url": "http://192.168.1.20/erpdung-hao/services/erpv1/login.sof.vn/login.sof.vn/index.php",
+  "selected_type_code": "ERP",
+  "selected_service_url": "http://192.168.1.20/erpdung-hao/services/erpv1/services.sof.vn/index.php",
+  "login": {
+    "login_url": "http://192.168.1.20/erpdung-hao/services/erpv1/login.sof.vn/login.sof.vn/index.php",
+    "type_code": "ERP",
+    "token_source": "couchdb_direct",
+    "attempts": [
+      {
+        "login_url": "http://192.168.1.20/erpdung-hao/services/erpv1/login.sof.vn/login.sof.vn/index.php",
+        "type_code": "CHAMCONG",
+        "error": "Tai khoan khong co quyen truy cap ung dung nay"
+      }
+    ]
+  },
+  "service_selection": {
+    "probes": [
+      {
+        "service_url": "http://192.168.1.20/services.sof.vn/index.php",
+        "ok": false,
+        "error": "<!DOCTYPE HTML PUBLIC \"-//IETF//DTD HTML 2.0//EN\">\n<html><head>\n<title>404 Not Found</title>\n</head><body>\n<h1>Not Found</h1>\n<p>The requested URL was not found on this server.</p>\n</body></html>"
+      },
+      {
+        "service_url": "http://192.168.1.20/erpdung-hao/services/erpv1/services.sof.vn/index.php",
+        "ok": true,
+        "employee_count": 49
+      }
+    ]
+  },
+  "results": [
+    {
+      "api": "B0 Login",
+      "status": "PASS",
+      "detail": "Login DEV success",
+      "login_url": "http://192.168.1.20/erpdung-hao/services/erpv1/login.sof.vn/login.sof.vn/index.php",
+      "type_code": "ERP",
+      "token_source": "couchdb_direct",
+      "code": "erp.chamcongpro1",
+      "database": "hao_erp_sofv5_0",
+      "domain": "http://192.168.1.20/erpdung-hao/services/erpv1"
+    },
+    {
+      "api": "Service URL select",
+      "status": "PASS",
+      "detail": "Selected working DEV service URL",
+      "service_url": "http://192.168.1.20/erpdung-hao/services/erpv1/services.sof.vn/index.php",
+      "probes": [
+        {
+          "service_url": "http://192.168.1.20/services.sof.vn/index.php",
+          "ok": false,
+          "error": "<!DOCTYPE HTML PUBLIC \"-//IETF//DTD HTML 2.0//EN\">\n<html><head>\n<title>404 Not Found</title>\n</head><body>\n<h1>Not Found</h1>\n<p>The requested URL was not found on this server.</p>\n</body></html>"
+        },
+        {
+          "service_url": "http://192.168.1.20/erpdung-hao/services/erpv1/services.sof.vn/index.php",
+          "ok": true,
+          "employee_count": 49
+        }
+      ]
+    },
+    {
+      "api": "S1 List Employees (data)",
+      "status": "PASS",
+      "detail": "Employee list via func=data returned data",
+      "employee_count": 49
+    },
+    {
+      "api": "S2 List Employees (LayNhanVien)",
+      "status": "PASS",
+      "detail": "Employee list via fallback func returned data",
+      "employee_count": 49
+    },
+    {
+      "api": "S3 Get Employee By ID",
+      "status": "PASS",
+      "detail": "layNhanVienTheoMa returned employee record",
+      "employee_id": "SOF001"
+    },
+    {
+      "api": "S4 Get Employee Image",
+      "status": "PASS",
+      "detail": "getAnh returned image bytes",
+      "employee_id": "SOF001",
+      "bytes": 1017925,
+      "content_type": "image/jpeg"
+    },
+    {
+      "api": "S5 Upload Employee Image",
+      "status": "FAIL",
+      "detail": "uploadAnh returned error payload",
+      "employee_id": "SOF001",
+      "response": {
+        "success": false,
+        "message": "Dữ liệu upload không phải ảnh hợp lệ",
+        "employee_id": "SOF001",
+        "column": "lv008"
+      }
+    },
+    {
+      "api": "S6 Update Employee Image Token",
+      "status": "PASS",
+      "detail": "updateImageToken success",
+      "employee_id": "SOF001",
+      "used_token": "2026042109225049zDSQ8NoSu6UOaAMu"
+    },
+    {
+      "api": "S7 Push Attendance",
+      "status": "PASS",
+      "detail": "pushAttendance accepted attendance record",
+      "employee_id": "SOF001",
+      "attendance_date": "2026-04-21",
+      "attendance_time": "09:29:16"
+    },
+    {
+      "api": "S8 Check Recent Attendance",
+      "status": "PASS",
+      "detail": "checkRecentAttendance returned success",
+      "employee_id": "SOF001",
+      "exists": true,
+      "count": 1
+    },
+    {
+      "api": "S9 Get Online Attendance",
+      "status": "PASS",
+      "detail": "getOnlineAttendance returned success",
+      "records": 3,
+      "employee_id": "SOF001"
+    },
+    {
+      "api": "S10 Create SOF Image Token",
+      "status": "FAIL",
+      "detail": "Unauthorized"
+    }
+  ],
+  "summary": {
+    "pass": 10,
+    "warn": 0,
+    "fail": 2,
+    "skip": 0
+  }
+}

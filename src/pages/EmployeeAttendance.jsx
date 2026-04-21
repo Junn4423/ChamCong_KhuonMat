@@ -3,6 +3,8 @@ import { Link, useNavigate } from 'react-router-dom'
 import { api, clearSessionToken } from '../services/api'
 import { ROUTES } from '../config/routes'
 
+const SETTINGS_REFRESH_INTERVAL_MS = 15000
+
 function todayIsoDate() {
   const now = new Date()
   const month = `${now.getMonth() + 1}`.padStart(2, '0')
@@ -15,6 +17,12 @@ function modeLabel(mode, selectedType) {
     return 'Ghi chấm công tự động'
   }
   return selectedType === 'checkout' ? 'Checkout' : 'Checkin'
+}
+
+function normalizeAttendanceMode(value) {
+  return String(value || '').trim().toLowerCase() === 'auto_record'
+    ? 'auto_record'
+    : 'checkin_checkout'
 }
 
 export default function EmployeeAttendance() {
@@ -70,14 +78,28 @@ export default function EmployeeAttendance() {
   async function loadEmployeeAttendanceSettings() {
     try {
       const res = await api.getEmployeeAttendanceSettings()
-      if (!res?.success) return
+      if (!res?.success) return null
 
-      const mode = String(res.attendance_settings?.mode || '').trim().toLowerCase()
-      setAttendanceMode(mode === 'auto_record' ? 'auto_record' : 'checkin_checkout')
-      setCooldownSeconds(Number(res.attendance_settings?.cooldown_seconds) || 0)
+      const mode = normalizeAttendanceMode(res.attendance_settings?.mode)
+      setAttendanceMode(mode)
+      const nextCooldownSeconds = Number(res.attendance_settings?.cooldown_seconds) || 0
+      setCooldownSeconds(nextCooldownSeconds)
+      return {
+        mode,
+        cooldownSeconds: nextCooldownSeconds,
+      }
     } catch {
       // Keep default local mode when API is unavailable.
+      return null
     }
+  }
+
+  function syncAttendanceModeFromResponse(payload) {
+    if (!payload || payload.attendance_mode == null) {
+      return
+    }
+    const mode = normalizeAttendanceMode(payload?.attendance_mode)
+    setAttendanceMode(mode)
   }
 
   async function startCamera() {
@@ -145,6 +167,10 @@ export default function EmployeeAttendance() {
     setFeedback(null)
 
     try {
+      // Pull latest server-side mode right before submit so employee flow follows admin setting instantly.
+      const latestSettings = await loadEmployeeAttendanceSettings()
+      const effectiveMode = latestSettings?.mode || attendanceMode
+
       const imageBase64 = captureImageBase64()
       if (!imageBase64) {
         setFeedback({
@@ -155,7 +181,7 @@ export default function EmployeeAttendance() {
         return
       }
 
-      const attendanceType = attendanceMode === 'auto_record'
+      const attendanceType = effectiveMode === 'auto_record'
         ? 'auto'
         : selectedAttendanceType
 
@@ -163,6 +189,8 @@ export default function EmployeeAttendance() {
         image_base64: imageBase64,
         attendance_type: attendanceType,
       })
+
+      syncAttendanceModeFromResponse(res)
 
       if (!res?.success) {
         setFeedback({
@@ -197,6 +225,26 @@ export default function EmployeeAttendance() {
 
     setSubmitting(false)
   }
+
+  useEffect(() => {
+    const refreshSettings = () => {
+      loadEmployeeAttendanceSettings()
+    }
+
+    const timerId = setInterval(refreshSettings, SETTINGS_REFRESH_INTERVAL_MS)
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        refreshSettings()
+      }
+    }
+
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    return () => {
+      clearInterval(timerId)
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+    }
+  }, [])
 
   async function loadHistory(dateValue = historyDate) {
     setHistoryLoading(true)

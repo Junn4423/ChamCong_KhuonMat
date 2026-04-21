@@ -402,6 +402,10 @@ if (!function_exists('lv_build_token_result')) {
             $deviceType = 'mobile';
         } elseif (isset($userData['lv397']) && lv_trim_value($userData['lv397']) !== '' && lv_trim_value($userData['lv397']) === $token) {
             $deviceType = 'desktop';
+        } elseif (isset($userData['lv497']) && lv_trim_value($userData['lv497']) !== '' && lv_trim_value($userData['lv497']) === $token) {
+            $deviceType = 'chamcongdes';
+        } elseif (isset($userData['lv597']) && lv_trim_value($userData['lv597']) !== '' && lv_trim_value($userData['lv597']) === $token) {
+            $deviceType = 'chamcongapp';
         }
 
         $systemName = '';
@@ -489,11 +493,15 @@ if (!function_exists('lv_find_token_in_database_fallback')) {
             $webToken = isset($userData['lv097']) ? lv_trim_value($userData['lv097']) : '';
             $mobileToken = isset($userData['lv297']) ? lv_trim_value($userData['lv297']) : '';
             $desktopToken = isset($userData['lv397']) ? lv_trim_value($userData['lv397']) : '';
+            $desktopChamCongToken = isset($userData['lv497']) ? lv_trim_value($userData['lv497']) : '';
+            $mobileChamCongToken = isset($userData['lv597']) ? lv_trim_value($userData['lv597']) : '';
 
             if (
                 ($webToken !== '' && $webToken === $vToken)
                 || ($mobileToken !== '' && $mobileToken === $vToken)
                 || ($desktopToken !== '' && $desktopToken === $vToken)
+                || ($desktopChamCongToken !== '' && $desktopChamCongToken === $vToken)
+                || ($mobileChamCongToken !== '' && $mobileChamCongToken === $vToken)
             ) {
                 return lv_build_token_result($userData, $vToken, $database, $routeDoc);
             }
@@ -527,6 +535,8 @@ if (!function_exists('lv_find_token_in_database')) {
                     array('lv097' => $vToken),
                     array('lv297' => $vToken),
                     array('lv397' => $vToken),
+                    array('lv497' => $vToken),
+                    array('lv597' => $vToken),
                 )
             ),
             'limit' => 1,

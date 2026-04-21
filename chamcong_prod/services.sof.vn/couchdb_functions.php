@@ -2,16 +2,19 @@
 // ============ CouchDB Functions ============
 // Cấu hình CouchDB
 
-$couchHost = '127.0.0.1';
+// $couchHost = '127.0.0.1';
+// $couchPort = '5984';
+// $couchUser = 'root';
+// $couchPass = 'rootsof';
+// $couchDB = 'couchdb182';
+
+
+$couchHost = '192.168.1.20';
 $couchPort = '5984';
 $couchUser = 'admin';
-$couchPass = '';
-$couchDB = 'couchdb';
-//$couchHost = '192.168.1.18';
-//$couchPort = '5984';
-//$couchUser = 'admin';
-//$couchPass = 'admin123';
-//$couchDB = 'couchdb18';
+$couchPass = 'rootsof';
+$couchDB = 'couchdb182';
+
 $useTable = 'lv_lv0066';
 $serverTable = 'lv_lv0067';
 // Bảng user dùng cho các hàm lookup token
@@ -66,7 +69,9 @@ function findUserByToken($vToken)
       '$or' => array(
         array('lv097' => $vToken),
         array('lv297' => $vToken),
-        array('lv397' => $vToken)
+        array('lv397' => $vToken),
+        array('lv497' => $vToken),
+        array('lv597' => $vToken)
       )
     ),
     'limit' => 1
@@ -93,6 +98,10 @@ function findUserByToken($vToken)
       $deviceType = 'mobile';
     } elseif (isset($userData['lv397']) && $userData['lv397'] === $vToken && $userData['lv397'] !== '') {
       $deviceType = 'desktop';
+    } elseif (isset($userData['lv497']) && $userData['lv497'] === $vToken && $userData['lv497'] !== '') {
+      $deviceType = 'chamcongdes';
+    } elseif (isset($userData['lv597']) && $userData['lv597'] === $vToken && $userData['lv597'] !== '') {
+      $deviceType = 'chamcongapp';
     }
 
     return array(
@@ -135,7 +144,9 @@ function findUserByTokenFallback($vToken)
       // Kiểm tra token ở cả 3 cột
       if ((isset($userData['lv097']) && $userData['lv097'] === $vToken && $userData['lv097'] !== '') ||
         (isset($userData['lv297']) && $userData['lv297'] === $vToken && $userData['lv297'] !== '') ||
-        (isset($userData['lv397']) && $userData['lv397'] === $vToken && $userData['lv397'] !== '')
+        (isset($userData['lv397']) && $userData['lv397'] === $vToken && $userData['lv397'] !== '') ||
+        (isset($userData['lv497']) && $userData['lv497'] === $vToken && $userData['lv497'] !== '') ||
+        (isset($userData['lv597']) && $userData['lv597'] === $vToken && $userData['lv597'] !== '')
       ) {
 
         $username = str_replace($vUserTable . ':', '', $userData['_id']);
@@ -148,6 +159,10 @@ function findUserByTokenFallback($vToken)
           $deviceType = 'mobile';
         } elseif (isset($userData['lv397']) && $userData['lv397'] === $vToken && $userData['lv397'] !== '') {
           $deviceType = 'desktop';
+        } elseif (isset($userData['lv497']) && $userData['lv497'] === $vToken && $userData['lv497'] !== '') {
+          $deviceType = 'chamcongdes';
+        } elseif (isset($userData['lv597']) && $userData['lv597'] === $vToken && $userData['lv597'] !== '') {
+          $deviceType = 'chamcongapp';
         }
 
         return array(
@@ -193,14 +208,12 @@ function couchdbLoginLevel1($username, $password, $TypeCode,$couchDBOk,$deviceTy
   }
 
   $userData = json_decode($result['body'], true);
-
   $inputHash = md5($password);
 
   // Kiểm tra password trước
   if (!isset($userData['lv005']) || $userData['lv005'] !== $inputHash) {
     return array("success" => false, "message" => "Tên đăng nhập hoặc mật khẩu không đúng", "httpCode" => 401);
   }
-
   if ($TypeCode !== $userData['lv676']) {
     return array("success" => false, "message" => "Đăng nhập sai app", "httpCode" => 402);
   }
@@ -210,6 +223,12 @@ function couchdbLoginLevel1($username, $password, $TypeCode,$couchDBOk,$deviceTy
           break;
           case 'desktop':
             $domain=$userData['lv668'] ?? null;
+          break;
+          case 'chamcongdes':
+            $domain=$userData['lv496'] ?? null;
+          break;
+           case 'chamcongapp':
+            $domain=$userData['lv596'] ?? null;
           break;
           default:
             $domain=$userData['lv668'] ?? null;
@@ -230,7 +249,6 @@ function couchdbLoginLevel1($username, $password, $TypeCode,$couchDBOk,$deviceTy
     'lv003'           => $userData['lv003'] ?? null,
     'couchDBOk'           => $couchDBOk ?? null
   );
-
   return array("success" => true, "message" => "Đăng nhập thành công", "response" => $response);
 }
 
@@ -338,6 +356,16 @@ function saveToken($vUserName, $vToken, $vDeviceType,$couchDBOk='')
       $userData['lv398'] = date('Y-m-d H:i:s'); // Ngày Token Desktop
       $userData['lv399'] = 0; // Cho phép đăng nhập Desktop
       break;
+    case 'chamcongdes':
+      $userData['lv497'] = $vToken; // Token Desktop Cham Cong
+      $userData['lv498'] = date('Y-m-d H:i:s'); // Ngày Token Desktop Cham Cong
+      $userData['lv499'] = 0; // Cho phép đăng nhập Desktop Cham Cong
+      break;
+    case 'chamcongapp':
+      $userData['lv597'] = $vToken; // Token App Cham Cong
+      $userData['lv598'] = date('Y-m-d H:i:s'); // Ngày Token App Cham Cong
+      $userData['lv599'] = 0; // Cho phép đăng nhập App Cham Cong
+      break;
     default:
       return false; // Loại thiết bị không hợp lệ
   }
@@ -382,6 +410,14 @@ function verifyToken($vUserName, $vToken)
     return array('success' => true, 'deviceType' => 'desktop', 'userData' => $userData);
   }
 
+  if (isset($userData['lv497']) && $userData['lv497'] === $vToken && $userData['lv497'] !== '') {
+    return array('success' => true, 'deviceType' => 'chamcongdes', 'userData' => $userData);
+  }
+
+  if (isset($userData['lv597']) && $userData['lv597'] === $vToken && $userData['lv597'] !== '') {
+    return array('success' => true, 'deviceType' => 'chamcongapp', 'userData' => $userData);
+  }
+
   return array('success' => false, 'message' => 'Invalid token');
 }
 
@@ -417,6 +453,14 @@ function removeToken($vUserName, $vDeviceType)
     case 'desktop':
       $userData['lv397'] = ''; // Xóa Token Desktop
       $userData['lv398'] = date('Y-m-d H:i:s'); // Cập nhật thời gian
+      break;
+    case 'chamcongdes':
+      $userData['lv497'] = ''; // Xóa Token Desktop Cham Cong
+      $userData['lv498'] = date('Y-m-d H:i:s'); // Cập nhật thời gian
+      break;
+    case 'chamcongapp':
+      $userData['lv597'] = ''; // Xóa Token App Cham Cong
+      $userData['lv598'] = date('Y-m-d H:i:s'); // Cập nhật thời gian
       break;
     default:
       return false; // Loại thiết bị không hợp lệ

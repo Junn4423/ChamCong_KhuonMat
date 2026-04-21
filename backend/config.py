@@ -46,13 +46,23 @@ ERP_HTTP_SERVICE_URL = _get_profiled_env(
     'ERP_HTTP_SERVICE_URL',
     'http://192.168.1.20/erpdung-hao/services/erpv1/services.sof.vn/index.php',
 )
+_ERP_HTTP_SERVICE_PATH_SUFFIX_DEFAULT = (
+    '/services.sof.vn/index.php'
+    if ERP_ENV_PROFILE == 'PROD'
+    else '/chamcong/services.sof.vn/index.php'
+)
 ERP_HTTP_SERVICE_PATH_SUFFIX = _get_profiled_env(
     'ERP_HTTP_SERVICE_PATH_SUFFIX',
-    '/chamcong/services.sof.vn/index.php',
+    _ERP_HTTP_SERVICE_PATH_SUFFIX_DEFAULT,
 ).strip()
+_ERP_HTTP_LOGIN_URL_DEFAULT = (
+    'http://login.sof.com.vn/login.sof.vn/index.php'
+    if ERP_ENV_PROFILE == 'PROD'
+    else 'http://192.168.1.20/erpdung-hao/services/erpv1/login.sof.vn/login.sof.vn/index.php'
+)
 ERP_HTTP_LOGIN_URL = _get_profiled_env(
     'ERP_HTTP_LOGIN_URL',
-    'http://192.168.1.20/erpdung-hao/services/erpv1/login.sof.vn/login.sof.vn/index.php',
+    _ERP_HTTP_LOGIN_URL_DEFAULT,
 )
 ERP_HTTP_TIMEOUT = int(os.getenv('ERP_HTTP_TIMEOUT', 10))
 ERP_HTTP_IMAGE_COLUMN = os.getenv('ERP_HTTP_IMAGE_COLUMN', 'lv008')

@@ -256,10 +256,14 @@ function lv_resolve_mysql_target()
 				$target['port'] = $tokenPort;
 			}
 
-			$tokenUser = trim((string)(isset($userData['lv095']) ? $userData['lv095'] : ''));
+			$tokenUser = trim((string)(isset($userData['lv096']) ? $userData['lv096'] : ''));
+			if ($tokenUser === '') {
+				$tokenUser = trim((string)(isset($userData['lv095']) ? $userData['lv095'] : ''));
+			}
 			$tokenPass = (string)(isset($userData['lv099']) ? $userData['lv099'] : '');
 			if ($tokenUser !== '') {
 				$target['user'] = $tokenUser;
+				$target['source'] = 'token';
 				if ($tokenPass !== '') {
 					$target['password'] = $tokenPass;
 				}

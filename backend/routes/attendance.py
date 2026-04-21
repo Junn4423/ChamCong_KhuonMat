@@ -95,6 +95,19 @@ def _distance_to_similarity_percent(distance):
     return round(score * 100.0, 2)
 
 
+def _resolve_effective_attendance_type(requested_attendance_type):
+    attendance_mode = get_attendance_mode()
+    attendance_type = _normalize_attendance_type(requested_attendance_type)
+
+    if attendance_mode == 'auto_record':
+        return attendance_mode, 'auto'
+
+    if attendance_type == 'auto':
+        attendance_type = 'checkin'
+
+    return attendance_mode, attendance_type
+
+
 def _parse_cooldown_seconds(value, default_seconds=DEFAULT_ATTENDANCE_COOLDOWN_SECONDS):
     try:
         parsed = int(float(value))
@@ -418,13 +431,9 @@ def check_attendance():
         data = request.get_json(silent=True) or {}
         user_id = data.get('user_id')
         request_location = parse_location_payload(data)
-        attendance_type = _normalize_attendance_type(data.get('attendance_type'))
+        requested_attendance_type = _normalize_attendance_type(data.get('attendance_type'))
         attendance_cooldown_seconds = get_attendance_cooldown_seconds()
-        attendance_mode = get_attendance_mode()
-        if attendance_mode == 'auto_record':
-            attendance_type = 'auto'
-        elif attendance_type == 'auto':
-            attendance_type = 'checkin'
+        attendance_mode, attendance_type = _resolve_effective_attendance_type(requested_attendance_type)
         if not user_id:
             return jsonify({'success': False, 'message': 'Không tìm thấy user_id'}), 400
 
@@ -459,6 +468,8 @@ def check_attendance():
         return jsonify({
             'success': True,
             'message': action_result.get('message') or 'Chấm công thành công',
+            'attendance_mode': attendance_mode,
+            'requested_attendance_type': requested_attendance_type,
             'attendance_type': action_result.get('attendance_type') or attendance_type,
             'attendance_type_label': _attendance_type_label(action_result.get('attendance_type') or attendance_type),
             'user': _serialize_attendance_user(user),
@@ -489,11 +500,13 @@ def attendance_image():
         request_location = None
         include_preview = False
         attendance_type = 'checkin'
+        requested_attendance_type = 'checkin'
         attendance_cooldown_seconds = get_attendance_cooldown_seconds()
         if 'image' in request.files:
             image_file = request.files['image']
             attendance_code = request.form.get('attendance_code')
-            attendance_type = _normalize_attendance_type(request.form.get('attendance_type'))
+            requested_attendance_type = _normalize_attendance_type(request.form.get('attendance_type'))
+            attendance_type = requested_attendance_type
             include_preview_raw = request.form.get('include_preview', 'false')
             include_preview = str(include_preview_raw).strip().lower() in {'1', 'true', 'yes', 'on'}
             request_location = parse_location_payload({
@@ -518,7 +531,8 @@ def attendance_image():
                 return jsonify({'success': False, 'message': 'Thiếu ảnh'}), 400
             image_base64 = data['image_base64']
             attendance_code = data.get('attendance_code')
-            attendance_type = _normalize_attendance_type(data.get('attendance_type'))
+            requested_attendance_type = _normalize_attendance_type(data.get('attendance_type'))
+            attendance_type = requested_attendance_type
             include_preview_raw = data.get('include_preview', False)
             if isinstance(include_preview_raw, str):
                 include_preview = include_preview_raw.strip().lower() in {'1', 'true', 'yes', 'on'}
@@ -528,11 +542,7 @@ def attendance_image():
             with state.face_recognition_lock:
                 face_encoding, error = state.face_recognizer.encode_face_from_base64(image_base64)
 
-        attendance_mode = get_attendance_mode()
-        if attendance_mode == 'auto_record':
-            attendance_type = 'auto'
-        elif attendance_type == 'auto':
-            attendance_type = 'checkin'
+        attendance_mode, attendance_type = _resolve_effective_attendance_type(requested_attendance_type)
 
         if error:
             return jsonify({'success': False, 'message': error}), 400
@@ -653,6 +663,8 @@ def attendance_image():
             'message': action_result.get('message') or f'Điểm danh thành công cho {user.name}',
             'user': _serialize_attendance_user(user),
             'status': attendance_row.status if attendance_row else '',
+            'attendance_mode': attendance_mode,
+            'requested_attendance_type': requested_attendance_type,
             'attendance_type': action_result.get('attendance_type') or attendance_type,
             'attendance_type_label': _attendance_type_label(action_result.get('attendance_type') or attendance_type),
             'check_in_time': attendance_row.check_in_time.strftime('%H:%M:%S') if attendance_row and attendance_row.check_in_time else '',
@@ -676,13 +688,15 @@ def employee_attendance_image():
         attendance_code = None
         request_location = None
         attendance_type = 'checkin'
+        requested_attendance_type = 'checkin'
         attendance_cooldown_seconds = get_attendance_cooldown_seconds()
 
         image_bytes = b''
         if 'image' in request.files:
             image_file = request.files['image']
             attendance_code = request.form.get('attendance_code')
-            attendance_type = _normalize_attendance_type(request.form.get('attendance_type'))
+            requested_attendance_type = _normalize_attendance_type(request.form.get('attendance_type'))
+            attendance_type = requested_attendance_type
             request_location = parse_location_payload({
                 'latitude': request.form.get('latitude'),
                 'longitude': request.form.get('longitude'),
@@ -704,7 +718,8 @@ def employee_attendance_image():
                 return jsonify({'success': False, 'message': 'Thiếu ảnh'}), 400
 
             attendance_code = data.get('attendance_code')
-            attendance_type = _normalize_attendance_type(data.get('attendance_type'))
+            requested_attendance_type = _normalize_attendance_type(data.get('attendance_type'))
+            attendance_type = requested_attendance_type
             request_location = parse_location_payload(data)
 
             raw_base64 = image_base64.split(',', 1)[1] if ',' in image_base64 else image_base64
@@ -716,11 +731,7 @@ def employee_attendance_image():
             with state.face_recognition_lock:
                 face_encoding, error = state.face_recognizer.encode_face_from_base64(image_base64)
 
-        attendance_mode = get_attendance_mode()
-        if attendance_mode == 'auto_record':
-            attendance_type = 'auto'
-        elif attendance_type == 'auto':
-            attendance_type = 'checkin'
+        attendance_mode, attendance_type = _resolve_effective_attendance_type(requested_attendance_type)
 
         if error:
             return jsonify({'success': False, 'message': error}), 400
@@ -754,6 +765,9 @@ def employee_attendance_image():
                 'message': 'Không nhận diện được nhân viên',
                 'similarity_percent': similarity_percent,
                 'mismatch': False,
+                'attendance_mode': attendance_mode,
+                'requested_attendance_type': requested_attendance_type,
+                'attendance_type': attendance_type,
             }), 404
 
         matched_user_id = state.face_recognizer.known_face_ids[best_match_index]
@@ -791,6 +805,9 @@ def employee_attendance_image():
                 'similarity_percent': similarity_percent,
                 'mismatch': False,
                 'spoof_score': float(spoof_score),
+                'attendance_mode': attendance_mode,
+                'requested_attendance_type': requested_attendance_type,
+                'attendance_type': attendance_type,
             }), 400
 
         if matched_user.id != employee_user.id:
@@ -804,6 +821,9 @@ def employee_attendance_image():
                 'similarity_percent': similarity_percent,
                 'expected_user': _serialize_attendance_user(employee_user),
                 'detected_user': _serialize_attendance_user(matched_user),
+                'attendance_mode': attendance_mode,
+                'requested_attendance_type': requested_attendance_type,
+                'attendance_type': attendance_type,
             }), 409
 
         action_result = _apply_attendance_action(
@@ -822,6 +842,9 @@ def employee_attendance_image():
                 'similarity_percent': similarity_percent,
                 'mismatch': False,
                 'user': _serialize_attendance_user(employee_user),
+                'attendance_mode': attendance_mode,
+                'requested_attendance_type': requested_attendance_type,
+                'attendance_type': attendance_type,
             }), int(action_result.get('status_code') or 400)
 
         attendance_row = action_result.get('attendance')
@@ -832,6 +855,8 @@ def employee_attendance_image():
             'message': action_result.get('message') or f'Điểm danh thành công cho {employee_user.name}',
             'user': _serialize_attendance_user(employee_user),
             'status': attendance_row.status if attendance_row else '',
+            'attendance_mode': attendance_mode,
+            'requested_attendance_type': requested_attendance_type,
             'attendance_type': action_result.get('attendance_type') or attendance_type,
             'attendance_type_label': _attendance_type_label(action_result.get('attendance_type') or attendance_type),
             'check_in_time': attendance_row.check_in_time.strftime('%H:%M:%S') if attendance_row and attendance_row.check_in_time else '',
@@ -1028,11 +1053,13 @@ def employee_attendance_history():
 @attendance_bp.route('/api/employee/attendance_settings')
 @employee_required
 def employee_attendance_settings():
+    attendance_mode, effective_type = _resolve_effective_attendance_type('checkin')
     return jsonify({
         'success': True,
         'attendance_settings': {
-            'mode': get_attendance_mode(),
+            'mode': attendance_mode,
             'cooldown_seconds': get_attendance_cooldown_seconds(),
+            'effective_attendance_type': effective_type,
         },
     })
 

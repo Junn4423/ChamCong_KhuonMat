@@ -1,0 +1,80 @@
+{
+  "executed_at": "2026-04-21",
+  "target": "DEV",
+  "host": "192.168.1.20",
+  "summary": {
+    "pass": 1,
+    "fail": 11,
+    "warn": 0,
+    "skip": 0
+  },
+  "root_cause": {
+    "message": "services.sof.vn on DEV returns PHP Fatal Error: Undefined constant DB_SERVER",
+    "evidence": [
+      "POST /erpdung-hao/services/erpv1/services.sof.vn/index.php -> Fatal error at config.php:201",
+      "DB_SERVER is referenced in config.php but constant definitions are commented out"
+    ]
+  },
+  "results": [
+    {
+      "api": "B0 Login (system path)",
+      "status": "PASS",
+      "detail": "ERPHttpClient login succeeded via couchdb_direct fallback"
+    },
+    {
+      "api": "B0 Login Gateway (login.sof.vn)",
+      "status": "FAIL",
+      "detail": "Gateway returns status=1004 with empty token (or [] on legacy payloads)"
+    },
+    {
+      "api": "S1 List Employees (data)",
+      "status": "FAIL",
+      "detail": "ERP tra ve JSON khong hop le (raw response is PHP Fatal Error)"
+    },
+    {
+      "api": "S2 List Employees (LayNhanVien)",
+      "status": "FAIL",
+      "detail": "ERP tra ve JSON khong hop le (raw response is PHP Fatal Error)"
+    },
+    {
+      "api": "S3 Get Employee By ID",
+      "status": "FAIL",
+      "detail": "Dependent on employee list; get_employee returns not found / service invalid"
+    },
+    {
+      "api": "S4 Get Employee Image",
+      "status": "FAIL",
+      "detail": "Returns application/json payload containing PHP Fatal Error text, not image bytes"
+    },
+    {
+      "api": "S5 Upload Employee Image",
+      "status": "FAIL",
+      "detail": "uploadAnh returns [] (no success payload, no write confirmation)"
+    },
+    {
+      "api": "S6 Update Employee Image Token",
+      "status": "FAIL",
+      "detail": "ERP tra ve JSON khong hop le (raw response is PHP Fatal Error)"
+    },
+    {
+      "api": "S7 Push Attendance",
+      "status": "FAIL",
+      "detail": "ERP tra ve JSON khong hop le (raw response is PHP Fatal Error)"
+    },
+    {
+      "api": "S8 Check Recent Attendance",
+      "status": "FAIL",
+      "detail": "ERP tra ve JSON khong hop le (raw response is PHP Fatal Error)"
+    },
+    {
+      "api": "S9 Get Online Attendance",
+      "status": "FAIL",
+      "detail": "ERP tra ve JSON khong hop le (raw response is PHP Fatal Error)"
+    },
+    {
+      "api": "S10 Create SOF Image Token",
+      "status": "FAIL",
+      "detail": "Token register service returns Unauthorized"
+    }
+  ]
+}
