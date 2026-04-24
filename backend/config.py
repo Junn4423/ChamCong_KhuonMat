@@ -95,7 +95,7 @@ ERP_HTTP_SOF_DEV_TOKEN = _get_profiled_env(
 ERP_HTTP_TYPE_CODE = _get_profiled_env('ERP_HTTP_TYPE_CODE', 'CHAMCONG')
 ERP_HTTP_TYPE_CODE_DYNAMIC = _to_bool(_get_profiled_env('ERP_HTTP_TYPE_CODE_DYNAMIC', 'true'), default=True)
 ERP_HTTP_TYPE_CODE_PREFIX_MAP = _get_profiled_env('ERP_HTTP_TYPE_CODE_PREFIX_MAP', '').strip()
-ERP_HTTP_DEVICE_TYPE = _get_profiled_env('ERP_HTTP_DEVICE_TYPE', 'web')
+ERP_HTTP_DEVICE_TYPE = _get_profiled_env('ERP_HTTP_DEVICE_TYPE', 'chamcongdes')
 ERP_HTTP_INCLUDE_AUTH_IN_BODY = _to_bool(_get_profiled_env('ERP_HTTP_INCLUDE_AUTH_IN_BODY', 'false'), default=False)
 ERP_COUCHDB_HOST = _get_profiled_env('ERP_COUCHDB_HOST', '192.168.1.20')
 ERP_COUCHDB_PORT = _get_profiled_int('ERP_COUCHDB_PORT', 5984)

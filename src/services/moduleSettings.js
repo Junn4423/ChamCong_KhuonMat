@@ -12,6 +12,7 @@ export const MODULE_TOGGLE_KEYS = Object.freeze({
   report: 'report',
   onlineAttendanceCheck: 'online_attendance_check',
   accountManagement: 'account_management',
+  mobileConfig: 'mobile_config',
 })
 
 export const MODULE_TOGGLE_DEFINITIONS = Object.freeze([
@@ -61,7 +62,13 @@ export const MODULE_TOGGLE_DEFINITIONS = Object.freeze([
     key: MODULE_TOGGLE_KEYS.accountManagement,
     label: 'Quản lý tài khoản nhân viên',
     path: ROUTES.accountManagement,
-    description: 'Bật hoặc tắt module kéo dữ liệu tài khoản nhân viên từ ERP và quản lý lock/reset.',
+    description: 'Bật hoặc tắt module kéo tài khoản từ ERP và quản lý lock/reset.',
+  },
+  {
+    key: MODULE_TOGGLE_KEYS.mobileConfig,
+    label: 'Cấu hình mobile',
+    path: ROUTES.mobileConfig,
+    description: 'Bật hoặc tắt module auto-config cho app mobile (UDP discovery, QR pairing, pass).',
   },
 ])
 

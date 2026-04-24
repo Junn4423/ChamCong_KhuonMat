@@ -655,9 +655,9 @@ export default function Attendance() {
     ? ATTENDANCE_MODE_OPTIONS.autoRecord
     : ATTENDANCE_MODE_OPTIONS.checkinCheckout
   const attendanceCooldownSeconds = toCooldownTotalSeconds(attendanceSettings)
-  const autoAttendanceCooldownMs = attendanceCooldownSeconds > 0
+  const autoAttendanceCooldownMs = attendanceMode === ATTENDANCE_MODE_OPTIONS.checkinCheckout && attendanceCooldownSeconds > 0
     ? attendanceCooldownSeconds * 1000
-    : AUTO_ATTENDANCE_FALLBACK_COOLDOWN_MS
+    : (attendanceMode === ATTENDANCE_MODE_OPTIONS.checkinCheckout ? AUTO_ATTENDANCE_FALLBACK_COOLDOWN_MS : 0)
   const activeAttendanceType = attendanceMode === ATTENDANCE_MODE_OPTIONS.checkinCheckout
     ? selectedAttendanceType
     : 'auto'
@@ -922,10 +922,12 @@ export default function Attendance() {
 
               const now = Date.now()
               const nextAllowedAt = Number(autoAttendanceCooldownRef.current[candidateUserId] || 0)
-              const cooldownPassed = now >= nextAllowedAt
+              const cooldownPassed = attendanceMode === ATTENDANCE_MODE_OPTIONS.autoRecord || now >= nextAllowedAt
 
               if (streak.count >= AUTO_ATTENDANCE_STREAK_REQUIRED && cooldownPassed) {
-                autoAttendanceCooldownRef.current[candidateUserId] = now + autoAttendanceCooldownMs
+                if (attendanceMode === ATTENDANCE_MODE_OPTIONS.checkinCheckout) {
+                  autoAttendanceCooldownRef.current[candidateUserId] = now + autoAttendanceCooldownMs
+                }
                 autoAttendanceInFlightRef.current = true
 
                 try {
@@ -969,6 +971,7 @@ export default function Attendance() {
   }, [
     attendanceBusy,
     attendanceCooldownSeconds,
+    attendanceMode,
     activeAttendanceType,
     autoAttendanceCooldownMs,
     browserCameraSelected,
@@ -1539,7 +1542,7 @@ export default function Attendance() {
             <span className={`w-2.5 h-2.5 rounded-full ${cameraRunning ? 'bg-emerald-500' : 'bg-slate-300'}`} />
             <span className={cameraRunning ? 'text-emerald-700' : 'text-slate-500'}>
               {cameraRunning
-                ? (cameraRuntimeMode === 'browser' ? 'Camera trình duyệt đang chạy' : 'Camera backend đang chạy')
+                ? (cameraRuntimeMode === 'browser' ? 'Camera trình duyệt đang chạy' : 'Camera hệ thống đang chạy')
                 : 'Camera đang tắt'}
             </span>
           </div>

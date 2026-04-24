@@ -8,6 +8,7 @@ from backend.routes.attendance import attendance_bp
 from backend.routes.employee import employee_bp
 from backend.routes.location import location_bp
 from backend.routes.system_settings import system_settings_bp
+from backend.routes.mobile_config import mobile_config_bp
 
 ALL_BLUEPRINTS = [
     auth_bp,
@@ -17,6 +18,7 @@ ALL_BLUEPRINTS = [
     employee_bp,
     location_bp,
     system_settings_bp,
+    mobile_config_bp,
 ]
 
 

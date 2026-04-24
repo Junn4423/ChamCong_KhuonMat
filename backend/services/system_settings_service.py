@@ -15,6 +15,7 @@ MODULE_TOGGLE_KEYS = (
     'report',
     'online_attendance_check',
     'account_management',
+    'mobile_config',
 )
 
 DEFAULT_MODULE_VISIBILITY = {

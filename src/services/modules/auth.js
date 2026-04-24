@@ -1,19 +1,19 @@
 /**
  * Auth module — login, logout, session status.
  */
-import { request } from '../request'
+import { CLIENT_DEVICE_TYPE, request } from '../request'
 
 export const authApi = {
   adminLogin: (username, password, mode = 'system') => request('/api/admin_login', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ username, password, mode }),
+    body: JSON.stringify({ username, password, mode, deviceType: CLIENT_DEVICE_TYPE }),
   }),
 
   login: (username, password, mode = 'system') => request('/api/admin_login', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ username, password, mode }),
+    body: JSON.stringify({ username, password, mode, deviceType: CLIENT_DEVICE_TYPE }),
   }),
 
   adminLogout: () => request('/api/admin_logout', { method: 'POST' }),
@@ -25,7 +25,7 @@ export const authApi = {
   employeeLogin: (username, password) => request('/api/employee/login', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ username, password }),
+    body: JSON.stringify({ username, password, deviceType: CLIENT_DEVICE_TYPE }),
   }),
 
   employeeLogout: () => request('/api/employee/logout', { method: 'POST' }),

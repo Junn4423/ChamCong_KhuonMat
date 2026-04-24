@@ -16,6 +16,7 @@ class _AppState:
     admin_tokens = None             # set()
     erp_sessions = None             # dict
     camera_runtime_state = None     # dict
+    mobile_discovery_service = None # MobileUdpDiscoveryService | None
     load_known_faces = None         # callable
     ADMIN_PASSWORD = 'admin123'
     INTERNAL_ADMIN_USERNAME = 'admin'

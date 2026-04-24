@@ -4,6 +4,29 @@ import { api, clearSessionToken } from '../services/api'
 import { ROUTES } from '../config/routes'
 
 const SETTINGS_REFRESH_INTERVAL_MS = 15000
+const MIRROR_COMPENSATION_STORAGE_KEY = 'facecheck.employee.mirror_compensation'
+const CAPTURE_CENTER_CROP_RATIO = 0.9
+
+function readMirrorCompensationSetting() {
+  if (typeof window === 'undefined') {
+    return true
+  }
+
+  const raw = window.localStorage.getItem(MIRROR_COMPENSATION_STORAGE_KEY)
+  if (raw == null) {
+    return true
+  }
+
+  return raw !== '0'
+}
+
+function persistMirrorCompensationSetting(enabled) {
+  if (typeof window === 'undefined') {
+    return
+  }
+
+  window.localStorage.setItem(MIRROR_COMPENSATION_STORAGE_KEY, enabled ? '1' : '0')
+}
 
 function todayIsoDate() {
   const now = new Date()
@@ -25,6 +48,38 @@ function normalizeAttendanceMode(value) {
     : 'checkin_checkout'
 }
 
+async function applyWidestCameraZoom(stream) {
+  try {
+    const [track] = stream?.getVideoTracks?.() || []
+    if (!track || typeof track.getCapabilities !== 'function' || typeof track.applyConstraints !== 'function') {
+      return
+    }
+
+    const capabilities = track.getCapabilities()
+    const zoomRange = capabilities?.zoom
+    if (!zoomRange) {
+      return
+    }
+
+    const minZoom = Number(zoomRange.min)
+    const maxZoom = Number(zoomRange.max)
+    if (!Number.isFinite(minZoom)) {
+      return
+    }
+
+    // Keep optical zoom around 1x when available.
+    const targetZoom = Number.isFinite(maxZoom)
+      ? Math.min(maxZoom, Math.max(minZoom, 1))
+      : Math.max(minZoom, 1)
+
+    await track.applyConstraints({
+      advanced: [{ zoom: targetZoom }],
+    })
+  } catch {
+    // Some devices/browsers do not support manual zoom constraints.
+  }
+}
+
 export default function EmployeeAttendance() {
   const navigate = useNavigate()
   const videoRef = useRef(null)
@@ -43,6 +98,7 @@ export default function EmployeeAttendance() {
   const [attendanceMode, setAttendanceMode] = useState('checkin_checkout')
   const [cooldownSeconds, setCooldownSeconds] = useState(0)
   const [selectedAttendanceType, setSelectedAttendanceType] = useState('checkin')
+  const [mirrorCompensation, setMirrorCompensation] = useState(() => readMirrorCompensationSetting())
 
   useEffect(() => {
     initializeEmployeePage()
@@ -113,12 +169,15 @@ export default function EmployeeAttendance() {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: {
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
+          width: { ideal: 1080 },
+          height: { ideal: 1920 },
+          aspectRatio: { ideal: 3 / 4 },
           facingMode: 'user',
         },
         audio: false,
       })
+
+      await applyWidestCameraZoom(stream)
 
       streamRef.current = stream
       const video = videoRef.current
@@ -151,18 +210,35 @@ export default function EmployeeAttendance() {
     if (!video || !canvas) return ''
     if (!video.videoWidth || !video.videoHeight) return ''
 
-    canvas.width = video.videoWidth
-    canvas.height = video.videoHeight
+    const sourceWidth = video.videoWidth
+    const sourceHeight = video.videoHeight
+    const cropRatio = CAPTURE_CENTER_CROP_RATIO
+
+    let sx = 0
+    let sy = 0
+    let sw = sourceWidth
+    let sh = sourceHeight
+
+    if (cropRatio > 0 && cropRatio < 1) {
+      sw = Math.max(1, Math.floor(sourceWidth * cropRatio))
+      sh = Math.max(1, Math.floor(sourceHeight * cropRatio))
+      sx = Math.max(0, Math.floor((sourceWidth - sw) / 2))
+      sy = Math.max(0, Math.floor((sourceHeight - sh) / 2))
+    }
+
+    canvas.width = sw
+    canvas.height = sh
     const context = canvas.getContext('2d')
     if (!context) return ''
 
-    context.drawImage(video, 0, 0, canvas.width, canvas.height)
-    return canvas.toDataURL('image/jpeg', 0.86)
+    context.drawImage(video, sx, sy, sw, sh, 0, 0, sw, sh)
+    return canvas.toDataURL('image/jpeg', 0.92)
   }
 
   async function submitAttendance() {
     if (!cameraReady || submitting) return
 
+    let imageBase64 = ''
     setSubmitting(true)
     setFeedback(null)
 
@@ -171,7 +247,7 @@ export default function EmployeeAttendance() {
       const latestSettings = await loadEmployeeAttendanceSettings()
       const effectiveMode = latestSettings?.mode || attendanceMode
 
-      const imageBase64 = captureImageBase64()
+      imageBase64 = captureImageBase64()
       if (!imageBase64) {
         setFeedback({
           type: 'error',
@@ -188,6 +264,8 @@ export default function EmployeeAttendance() {
       const res = await api.employeeAttendanceImageBase64({
         image_base64: imageBase64,
         attendance_type: attendanceType,
+        include_preview: true,
+        tolerance: 0.58,
       })
 
       syncAttendanceModeFromResponse(res)
@@ -200,6 +278,7 @@ export default function EmployeeAttendance() {
           mismatch: Boolean(res?.mismatch),
           expectedUser: res?.expected_user || null,
           detectedUser: res?.detected_user || null,
+          previewImageBase64: res?.preview_image_base64 || imageBase64,
         })
         setSubmitting(false)
         return
@@ -213,6 +292,7 @@ export default function EmployeeAttendance() {
         checkOutTime: res?.check_out_time || '',
         locationText: res?.location_text || '',
         attendanceTypeLabel: res?.attendance_type_label || modeLabel(attendanceMode, selectedAttendanceType),
+        previewImageBase64: res?.preview_image_base64 || imageBase64,
       })
 
       await loadHistory(historyDate)
@@ -220,6 +300,7 @@ export default function EmployeeAttendance() {
       setFeedback({
         type: 'error',
         message: 'Không thể gửi dữ liệu chấm công',
+        previewImageBase64: imageBase64,
       })
     }
 
@@ -268,6 +349,14 @@ export default function EmployeeAttendance() {
       clearSessionToken()
       navigate(ROUTES.employeeLogin, { replace: true })
     }
+  }
+
+  function handleToggleMirrorCompensation() {
+    setMirrorCompensation(current => {
+      const nextValue = !current
+      persistMirrorCompensationSetting(nextValue)
+      return nextValue
+    })
   }
 
   if (checking) {
@@ -319,6 +408,13 @@ export default function EmployeeAttendance() {
             <div className="flex flex-wrap items-center justify-between gap-2">
               <h2 className="text-lg font-semibold text-slate-800">Camera chấm công</h2>
               <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleToggleMirrorCompensation}
+                  className="px-3 py-1.5 rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-sm font-medium"
+                >
+                  {mirrorCompensation ? 'Mirror: chuẩn' : 'Mirror: gốc'}
+                </button>
                 {!cameraReady ? (
                   <button
                     onClick={startCamera}
@@ -337,16 +433,28 @@ export default function EmployeeAttendance() {
               </div>
             </div>
 
-            <div className="rounded-2xl overflow-hidden border border-slate-200 bg-slate-900 aspect-[4/3] flex items-center justify-center">
+            <div className="relative rounded-2xl overflow-hidden border border-slate-200 bg-slate-900 aspect-[3/4] min-h-[420px] max-h-[78vh] sm:aspect-[4/5] sm:min-h-[520px] lg:aspect-[4/3] lg:min-h-0 lg:max-h-none flex items-center justify-center">
               <video
                 ref={videoRef}
-                className="w-full h-full object-cover"
+                className="w-full h-full object-contain lg:object-cover"
+                style={{ transform: mirrorCompensation ? 'scaleX(-1)' : 'none' }}
                 playsInline
                 muted
                 autoPlay
               />
+
+              {cameraReady && (
+                <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+                  <div className="w-[70%] h-[72%] max-w-[360px] rounded-[36%] border-2 border-white/70 shadow-[0_0_0_9999px_rgba(2,6,23,0.22)]" />
+                </div>
+              )}
             </div>
             <canvas ref={canvasRef} className="hidden" />
+
+            <p className="text-xs sm:text-sm text-slate-500">
+              Ở điện thoại, khung camera đã ưu tiên tỉ lệ dọc để khuôn mặt hiển thị lớn hơn.
+              Chế độ mirror mặc định đã bù ngược để thao tác không bị đảo chiều.
+            </p>
 
             {cameraError && (
               <div className="px-3 py-2 rounded-lg border border-red-100 bg-red-50 text-sm text-red-700">
@@ -420,6 +528,16 @@ export default function EmployeeAttendance() {
                 {feedback.checkInTime && <p>Checkin: {feedback.checkInTime}</p>}
                 {feedback.checkOutTime && <p>Checkout: {feedback.checkOutTime}</p>}
                 {feedback.locationText && <p>Vị trí: {feedback.locationText}</p>}
+                {feedback.previewImageBase64 && (
+                  <div className="pt-2 space-y-1">
+                    <p className="text-xs font-medium">Ảnh vừa chụp</p>
+                    <img
+                      src={feedback.previewImageBase64}
+                      alt="Ảnh vừa chụp"
+                      className="w-full max-h-64 object-contain rounded-xl border border-slate-300/60 bg-slate-900/5"
+                    />
+                  </div>
+                )}
                 {feedback.mismatch && (
                   <div className="pt-1 space-y-1">
                     <p className="font-semibold">Cảnh báo sai người chấm công:</p>

@@ -11,6 +11,7 @@ export const ROUTES = Object.freeze({
   onlineAttendanceCheck: '/admin/kiem-tra-cham-cong-online',
   systemSettings: '/admin/cai-dat-he-thong',
   accountManagement: '/admin/quan-ly-tai-khoan',
+  mobileConfig: '/admin/cau-hinh-mobile',
   employeeLogin: '/employee/login',
   employeeAttendance: '/employee/cham-cong',
 })

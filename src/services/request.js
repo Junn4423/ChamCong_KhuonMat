@@ -3,12 +3,31 @@
  * All API modules import `request` from here.
  */
 
-export const API_BASE = window.electronAPI?.apiPort
-  ? `http://127.0.0.1:${window.electronAPI.apiPort}`
-  : ''
+function resolveApiBase() {
+  if (typeof window === 'undefined') {
+    return ''
+  }
+
+  if (window.electronAPI?.apiPort) {
+    return `http://127.0.0.1:${window.electronAPI.apiPort}`
+  }
+
+  const injectedApiBase = typeof window.__FACECHECK_API_BASE__ === 'string'
+    ? window.__FACECHECK_API_BASE__.trim()
+    : ''
+
+  if (injectedApiBase) {
+    return injectedApiBase.replace(/\/+$/, '')
+  }
+
+  return ''
+}
+
+export const API_BASE = resolveApiBase()
 
 const SESSION_TOKEN_STORAGE_KEY = 'sessionToken'
 export const SESSION_EXPIRED_EVENT = 'facecheck:session-expired'
+export const CLIENT_DEVICE_TYPE = 'chamcongdes'
 const EXPIRED_SESSION_MESSAGE = 'Phiên đăng nhập đã hết hạn, vui lòng đăng nhập lại.'
 let sessionExpiredNotified = false
 
@@ -51,6 +70,7 @@ export function clearSessionToken() {
 
 function buildAuthHeaders(headers = {}) {
   const nextHeaders = { ...headers }
+  nextHeaders['X-Device-Type'] = CLIENT_DEVICE_TYPE
   if (sessionToken) {
     nextHeaders['X-Admin-Token'] = sessionToken
     nextHeaders['X-Session-Token'] = sessionToken

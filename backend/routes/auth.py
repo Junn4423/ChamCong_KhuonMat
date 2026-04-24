@@ -16,8 +16,29 @@ from backend.routes._helpers import (
 auth_bp = Blueprint('auth', __name__)
 
 
-def _login_erp_account(username, password, client_ip=''):
-    auth_info = erp_http_client.login(username, password, client_ip=client_ip)
+def _resolve_requested_device_type(payload):
+    if not isinstance(payload, dict):
+        payload = {}
+
+    for raw_value in (
+        payload.get('deviceType'),
+        payload.get('device_type'),
+        request.headers.get('X-Device-Type'),
+        request.headers.get('X-DEVICE-TYPE'),
+    ):
+        value = str(raw_value or '').strip()
+        if value:
+            return value
+    return ''
+
+
+def _login_erp_account(username, password, client_ip='', device_type=''):
+    auth_info = erp_http_client.login(
+        username,
+        password,
+        client_ip=client_ip,
+        device_type=device_type,
+    )
     if isinstance(auth_info, dict):
         auth_info = {**auth_info, 'auth_mode': 'system'}
     token, user_payload = issue_session(auth_info)
@@ -56,10 +77,18 @@ def session_login():
     data = request.get_json(silent=True) or {}
     username = (data.get('username') or '').strip()
     password = data.get('password') or ''
+    device_type = _resolve_requested_device_type(data)
     if not username or not password:
         return jsonify({'success': False, 'message': 'Vui lòng nhập tài khoản và mật khẩu ERP'}), 400
     try:
-        return jsonify(_login_erp_account(username, password, client_ip=request.remote_addr or ''))
+        return jsonify(
+            _login_erp_account(
+                username,
+                password,
+                client_ip=request.remote_addr or '',
+                device_type=device_type,
+            )
+        )
     except ERPServiceError as exc:
         return jsonify({'success': False, 'message': exc.message}), (exc.status_code or 401)
     except Exception as exc:
@@ -97,6 +126,7 @@ def admin_login():
     username = (data.get('username') or '').strip()
     password = data.get('password') or ''
     mode = str(data.get('mode') or 'system').strip().lower()
+    device_type = _resolve_requested_device_type(data)
 
     if mode not in {'system', 'internal'}:
         return jsonify({'success': False, 'message': 'Chế độ đăng nhập không hợp lệ'}), 400
@@ -117,7 +147,12 @@ def admin_login():
         return jsonify({'success': False, 'message': 'Vui lòng nhập tài khoản và mật khẩu hệ thống'}), 400
 
     try:
-        response = _login_erp_account(username, password, client_ip=request.remote_addr or '')
+        response = _login_erp_account(
+            username,
+            password,
+            client_ip=request.remote_addr or '',
+            device_type=device_type,
+        )
         state.admin_tokens.add(response['token'])
         return jsonify(response)
     except ERPServiceError as exc:

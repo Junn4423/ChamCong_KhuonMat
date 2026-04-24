@@ -16,6 +16,7 @@ import EntryPortal from './pages/EntryPortal'
 import EmployeeLogin from './pages/EmployeeLogin'
 import EmployeeAttendance from './pages/EmployeeAttendance'
 import AccountManagement from './pages/AccountManagement'
+import MobileConfig from './pages/MobileConfig'
 import NotFound from './pages/NotFound'
 import { ROUTES } from './config/routes'
 import {
@@ -123,6 +124,14 @@ export default function App() {
               element={(
                 <ModuleGate moduleKey={MODULE_TOGGLE_KEYS.accountManagement}>
                   <AccountManagement />
+                </ModuleGate>
+              )}
+            />
+            <Route
+              path={ROUTES.mobileConfig}
+              element={(
+                <ModuleGate moduleKey={MODULE_TOGGLE_KEYS.mobileConfig}>
+                  <MobileConfig />
                 </ModuleGate>
               )}
             />

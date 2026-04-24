@@ -12,6 +12,7 @@ import {
   Shuffle,
   Users,
   KeyRound,
+  Smartphone,
 } from 'lucide-react'
 import { ROUTES } from '../config/routes'
 import {
@@ -40,6 +41,12 @@ const navItems = [
     label: 'Quản lý tài khoản',
     icon: KeyRound,
     moduleKey: MODULE_TOGGLE_KEYS.accountManagement,
+  },
+  {
+    to: ROUTES.mobileConfig,
+    label: 'Cấu hình mobile',
+    icon: Smartphone,
+    moduleKey: MODULE_TOGGLE_KEYS.mobileConfig,
   },
   { to: ROUTES.systemSettings, label: 'Cài đặt hệ thống', icon: Settings },
 ]
@@ -172,7 +179,7 @@ export default function Layout() {
           user: {
             name: res.user?.name || 'Admin',
             code: res.user?.code || 'admin',
-            department: res.user?.department || 'Quản trị viên',
+              department: res.user?.department || 'Quản trị viên',
             route_prefix: res.user?.route_prefix || '',
             system_name: res.user?.system_name || '',
             system_note: res.user?.system_note || '',
@@ -350,3 +357,4 @@ export default function Layout() {
     </div>
   )
 }
+

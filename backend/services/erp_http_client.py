@@ -122,6 +122,18 @@ class ERPHttpClient:
             return raw_value
         return default
 
+    @classmethod
+    def _resolve_gateway_device_type(cls, value, default='chamcongdes'):
+        raw_value = str(value or '').strip().lower()
+        if not raw_value:
+            return default
+
+        if raw_value in {'mobile', 'app', 'android', 'ios', 'chamcongapp'}:
+            return 'chamcongapp'
+        if raw_value in {'web', 'website', 'desktop', 'electron', 'pc', 'chamcongdes'}:
+            return 'chamcongdes'
+        return default
+
     @staticmethod
     def _build_url_candidates(url, default_scheme='http'):
         text = str(url or '').strip()
@@ -230,8 +242,11 @@ class ERPHttpClient:
         self.type_code_prefix_map.update(
             self._parse_type_code_prefix_map(ERP_HTTP_TYPE_CODE_PREFIX_MAP),
         )
+        self.requested_device_type = str(
+            device_type or ERP_HTTP_DEVICE_TYPE or 'chamcongdes',
+        ).strip().lower()
         self.device_type = self._normalize_device_type(
-            device_type or ERP_HTTP_DEVICE_TYPE or 'desktop',
+            self.requested_device_type or 'chamcongdes',
             default='desktop',
         )
         self.include_auth_in_body = bool(ERP_HTTP_INCLUDE_AUTH_IN_BODY)
@@ -346,13 +361,19 @@ class ERPHttpClient:
                     continue
         raise ERPServiceError('Thoi gian cham cong khong hop le', status_code=400)
 
-    def login(self, username, password, client_ip='', client_mac=''):
+    def login(self, username, password, client_ip='', client_mac='', device_type=''):
         username = (username or '').strip()
         password = password or ''
         if not username or not password:
             raise ERPServiceError('Vui long nhap tai khoan va mat khau ERP', status_code=400)
 
-        login_device_type = self._normalize_device_type(self.device_type, default='desktop')
+        requested_device_type = str(
+            device_type or self.requested_device_type or 'chamcongdes',
+        ).strip().lower()
+        login_device_type = self._normalize_device_type(
+            requested_device_type,
+            default='desktop',
+        )
         login_type_code = self._resolve_type_code_for_username(username, fallback=self.type_code)
 
         gateway_response = None
@@ -361,7 +382,7 @@ class ERPHttpClient:
         for request_type, attempt_payload in self._build_gateway_login_attempts(
             username,
             password,
-            device_type=login_device_type,
+            device_type=requested_device_type,
             type_code=login_type_code,
         ):
             try:
@@ -465,7 +486,10 @@ class ERPHttpClient:
         return fallback_code
 
     def _build_gateway_login_attempts(self, username, password, device_type='', type_code=''):
-        login_device_type = self._normalize_device_type(device_type or self.device_type, default='desktop')
+        gateway_device_type = self._resolve_gateway_device_type(
+            device_type or self.requested_device_type,
+            default='chamcongdes',
+        )
         login_type_code = str(type_code or self.type_code or '').strip().upper()
 
         modern_payload = {
@@ -473,8 +497,8 @@ class ERPHttpClient:
             'username': username,
             'password': password,
         }
-        if login_device_type:
-            modern_payload['deviceType'] = login_device_type
+        if gateway_device_type:
+            modern_payload['deviceType'] = gateway_device_type
         if login_type_code:
             modern_payload['TYPE-SOF-CODE'] = login_type_code
 
@@ -488,8 +512,8 @@ class ERPHttpClient:
             'txtUserName': username,
             'txtPassword': password,
         }
-        if login_device_type:
-            legacy_payload['txtDeviceType'] = login_device_type
+        if gateway_device_type:
+            legacy_payload['txtDeviceType'] = gateway_device_type
         if login_type_code:
             legacy_payload['txtTypeCode'] = login_type_code
 
@@ -1671,7 +1695,10 @@ class ERPHttpClient:
     def _build_token_register_headers(self, username='', user_token='', admin_token=''):
         headers = {
             'Accept': 'application/json',
-            'X-DEVICE-TYPE': self.device_type,
+            'X-DEVICE-TYPE': self._resolve_gateway_device_type(
+                self.requested_device_type,
+                default='chamcongdes',
+            ),
         }
 
         user_token = (user_token or '').strip()

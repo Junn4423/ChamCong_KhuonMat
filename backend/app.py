@@ -15,6 +15,7 @@ import os
 os.environ.setdefault('KMP_DUPLICATE_LIB_OK', 'TRUE')
 os.environ.setdefault('OMP_NUM_THREADS', '1')
 os.environ.setdefault('MKL_NUM_THREADS', '1')
+import atexit
 
 from flask import Flask, jsonify, send_from_directory
 from flask_cors import CORS
@@ -30,6 +31,7 @@ from backend.models.database import db, User, Attendance, ensure_database_schema
 from backend.models.erp_integration import erp_attendance
 from backend.runtime import ensure_data_dir, ensure_db_path, sqlite_database_uri
 from backend.services.attendance_service import AttendanceService
+from backend.services.mobile_discovery_service import MobileUdpDiscoveryService
 
 _FACE_IMPORT_ERROR = None
 try:
@@ -133,6 +135,7 @@ def create_app():
     # Keep legacy field for compatibility with older code paths.
     state.ADMIN_PASSWORD = state.INTERNAL_ADMIN_PASSWORD
     state.SESSION_TTL_SECONDS = int(os.environ.get('SESSION_TTL_SECONDS', 8 * 3600))
+    state.mobile_discovery_service = None
 
     # ── Core functions shared with both routes and background tasks ──────
 
@@ -231,6 +234,18 @@ def create_app():
         attendance_service_ref[0] = AttendanceService(
             app, face_recognizer, perform_auto_attendance
         )
+
+    if state.mobile_discovery_service is None:
+        state.mobile_discovery_service = MobileUdpDiscoveryService(app)
+        state.mobile_discovery_service.start()
+
+    def _shutdown_mobile_discovery_service():
+        service = getattr(state, 'mobile_discovery_service', None)
+        if service is not None:
+            service.stop()
+            state.mobile_discovery_service = None
+
+    atexit.register(_shutdown_mobile_discovery_service)
 
     # ── Register route blueprints ────────────────────────────────────────
 

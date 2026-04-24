@@ -21,6 +21,7 @@ import { attendanceApi } from './modules/attendance'
 import { employeeApi } from './modules/employee'
 import { locationApi } from './modules/location'
 import { systemSettingsApi } from './modules/systemSettings'
+import { mobileConfigApi } from './modules/mobileConfig'
 import { request } from './request'
 
 /**
@@ -50,4 +51,7 @@ export const api = {
 
   // System settings
   ...systemSettingsApi,
+
+  // Mobile auto-config
+  ...mobileConfigApi,
 }

@@ -10,7 +10,7 @@ from datetime import datetime, date
 
 import cv2
 import numpy as np
-from PIL import Image as PILImage
+from PIL import Image as PILImage, ImageOps as PILImageOps
 from flask import Blueprint, request, jsonify, send_file, g
 
 from backend.models.database import db, User, Attendance, EmployeeImage
@@ -36,6 +36,7 @@ from backend.routes._helpers import (
     get_runtime_location, save_attendance_location,
     serialize_attendance_location,
     serialize_attendance_locations,
+    resolve_request_auth,
     resolve_request_auth_mode,
 )
 
@@ -93,6 +94,292 @@ def _distance_to_similarity_percent(distance):
         return None
     score = max(0.0, min(1.0, score))
     return round(score * 100.0, 2)
+
+
+def _parse_tolerance(value, default=0.58):
+    try:
+        tolerance = float(value)
+    except (TypeError, ValueError):
+        tolerance = float(default)
+    return max(0.35, min(tolerance, 0.8))
+
+
+def _decode_image_to_bgr(image_bytes):
+    if not image_bytes:
+        return None
+
+    image = cv2.imdecode(np.frombuffer(image_bytes, dtype=np.uint8), cv2.IMREAD_COLOR)
+    if image is not None and image.size > 0:
+        return image
+
+    try:
+        pil_img = PILImage.open(io.BytesIO(image_bytes))
+        pil_img = PILImageOps.exif_transpose(pil_img)
+        if pil_img.mode != 'RGB':
+            pil_img = pil_img.convert('RGB')
+        return cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
+    except Exception:
+        return None
+
+
+def _build_preview_image_base64(frame, bbox=None, label=''):
+    if frame is None or frame.size == 0:
+        return None
+
+    try:
+        preview_frame = frame.copy()
+        if len(preview_frame.shape) == 2:
+            preview_frame = cv2.cvtColor(preview_frame, cv2.COLOR_GRAY2BGR)
+        elif len(preview_frame.shape) == 3 and preview_frame.shape[2] == 4:
+            preview_frame = cv2.cvtColor(preview_frame, cv2.COLOR_RGBA2BGR)
+
+        if bbox is not None and len(bbox) >= 4:
+            h, w = preview_frame.shape[:2]
+            x1 = max(0, min(w - 1, int(bbox[0])))
+            y1 = max(0, min(h - 1, int(bbox[1])))
+            x2 = max(x1 + 1, min(w, int(bbox[2])))
+            y2 = max(y1 + 1, min(h, int(bbox[3])))
+            cv2.rectangle(preview_frame, (x1, y1), (x2, y2), (0, 220, 255), 2)
+
+            label_text = str(label or '').strip()
+            if label_text:
+                cv2.putText(
+                    preview_frame,
+                    label_text,
+                    (x1, max(26, y1 - 10)),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.7,
+                    (0, 220, 255),
+                    2,
+                    cv2.LINE_AA,
+                )
+
+        ok, encoded = cv2.imencode('.jpg', preview_frame, [int(cv2.IMWRITE_JPEG_QUALITY), 84])
+        if not ok:
+            return None
+
+        return 'data:image/jpeg;base64,' + base64.b64encode(encoded.tobytes()).decode('utf-8')
+    except Exception:
+        return None
+
+
+def _normalize_bbox(bbox, frame_width, frame_height):
+    if bbox is None or len(bbox) < 4:
+        return None
+
+    try:
+        x1 = max(0, min(frame_width - 1, int(bbox[0])))
+        y1 = max(0, min(frame_height - 1, int(bbox[1])))
+        x2 = max(x1 + 1, min(frame_width, int(bbox[2])))
+        y2 = max(y1 + 1, min(frame_height, int(bbox[3])))
+    except Exception:
+        return None
+
+    return [x1, y1, x2, y2]
+
+
+def _compute_brightness_score(frame):
+    if frame is None or frame.size == 0:
+        return 0.0
+
+    try:
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        mean_val = float(np.mean(gray))
+    except Exception:
+        mean_val = 0.0
+
+    score = (mean_val / 255.0) * 100.0
+    return round(max(0.0, min(100.0, score)), 2)
+
+
+def _compute_face_size_ratio(bbox, frame_width, frame_height):
+    if bbox is None or frame_width <= 0 or frame_height <= 0:
+        return 0.0
+
+    try:
+        face_width = max(1, int(bbox[2]) - int(bbox[0]))
+        face_height = max(1, int(bbox[3]) - int(bbox[1]))
+        face_area = float(face_width * face_height)
+        frame_area = float(frame_width * frame_height)
+    except Exception:
+        return 0.0
+
+    if frame_area <= 0:
+        return 0.0
+    return round(max(0.0, min(1.0, face_area / frame_area)), 4)
+
+
+def _build_face_guidance(bbox, frame_width, frame_height, brightness_score, detected_count):
+    default_payload = {
+        'code': 'no_face',
+        'message': 'Căn khung vào mặt và giữ máy ổn định.',
+        'ready_for_attendance': False,
+    }
+
+    if detected_count <= 0 or bbox is None:
+        if brightness_score < 24:
+            return {
+                'code': 'too_dark',
+                'message': 'Môi trường tối. Vui lòng bật đèn hỗ trợ để nhận diện.',
+                'ready_for_attendance': False,
+            }
+        return default_payload
+
+    if detected_count > 1:
+        return {
+            'code': 'multiple_faces',
+            'message': 'Chỉ để một khuôn mặt trong khung hình.',
+            'ready_for_attendance': False,
+        }
+
+    face_size_ratio = _compute_face_size_ratio(bbox, frame_width, frame_height)
+    center_x = ((bbox[0] + bbox[2]) / 2.0) / float(max(frame_width, 1))
+    center_y = ((bbox[1] + bbox[3]) / 2.0) / float(max(frame_height, 1))
+
+    if brightness_score < 24:
+        return {
+            'code': 'too_dark',
+            'message': 'Ánh sáng quá tối. Đưa mặt ra nơi sáng hơn hoặc bật đèn.',
+            'ready_for_attendance': False,
+        }
+
+    if face_size_ratio < 0.1:
+        return {
+            'code': 'too_far',
+            'message': 'Đưa mặt gần hơn một chút để hệ thống nhận diện rõ hơn.',
+            'ready_for_attendance': False,
+        }
+
+    if face_size_ratio > 0.55:
+        return {
+            'code': 'too_close',
+            'message': 'Bạn đang quá gần camera. Lùi ra một chút.',
+            'ready_for_attendance': False,
+        }
+
+    if center_x < 0.24 or center_x > 0.76 or center_y < 0.2 or center_y > 0.8:
+        return {
+            'code': 'off_center',
+            'message': 'Căn giữa mặt vào khung để nhận diện chuẩn hơn.',
+            'ready_for_attendance': False,
+        }
+
+    return {
+        'code': 'good',
+        'message': 'Vị trí khuôn mặt tốt. Giữ yên trong giây lát.',
+        'ready_for_attendance': True,
+    }
+
+
+def _resolve_employee_image_attendance_context():
+    token, auth_obj, user_obj = resolve_request_auth()
+    if not token or not isinstance(user_obj, dict):
+        return None, (
+            jsonify({
+                'success': False,
+                'message': 'Phiên đăng nhập đã hết hạn, vui lòng đăng nhập lại',
+            }),
+            401,
+        )
+
+    if token:
+        g.session_token = token
+    if user_obj:
+        g.session_user = user_obj
+    if auth_obj:
+        g.erp_auth = auth_obj
+
+    auth_mode = str(user_obj.get('auth_mode') or user_obj.get('mode') or '').strip().lower()
+    if auth_mode == 'employee':
+        user_id_raw = user_obj.get('user_id')
+        employee_id = str(user_obj.get('employee_id') or '').strip()
+
+        user_row = None
+        if user_id_raw is not None:
+            try:
+                user_row = User.query.get(int(user_id_raw))
+            except (TypeError, ValueError):
+                user_row = None
+
+        if user_row is None and employee_id:
+            user_row = User.query.filter_by(employee_id=employee_id).first()
+
+        if user_row is None:
+            return None, (
+                jsonify({
+                    'success': False,
+                    'message': 'Không tìm thấy nhân viên tương ứng với phiên đăng nhập',
+                }),
+                401,
+            )
+
+        g.employee_user = user_row
+        return {
+            'mode': 'employee',
+            'employee_user': user_row,
+            'erp_auth': None,
+        }, None
+
+    admin_token = token or request.headers.get('X-Admin-Token')
+    is_admin_session = bool(auth_obj) or bool(
+        admin_token and admin_token in state.admin_tokens and user_obj
+    )
+    if is_admin_session:
+        return {
+            'mode': 'admin',
+            'employee_user': None,
+            'erp_auth': getattr(g, 'erp_auth', None),
+        }, None
+
+    return None, (
+        jsonify({
+            'success': False,
+            'message': 'Phiên hiện tại không hợp lệ cho chấm công',
+        }),
+        403,
+    )
+
+
+def _detect_faces_with_fallback(image):
+    if image is None or image.size == 0:
+        return image, []
+
+    with state.face_recognition_lock:
+        primary_results = state.face_recognizer.engine.detect_and_encode(image)
+        if primary_results:
+            return image, primary_results
+
+        relaxed_engine = None
+        try:
+            relaxed_engine = state.face_recognizer._get_relaxed_engine()
+        except Exception:
+            relaxed_engine = None
+
+        fallback_frames = []
+        try:
+            enhanced = state.face_recognizer._enhance_for_detection(image)
+            if enhanced is not None and enhanced.size > 0:
+                fallback_frames.append(enhanced)
+        except Exception:
+            pass
+
+        try:
+            padded = state.face_recognizer._pad_to_square(image)
+            if padded is not None and padded.size > 0 and padded.shape[:2] != image.shape[:2]:
+                fallback_frames.append(padded)
+        except Exception:
+            pass
+
+        detect_engine = relaxed_engine or state.face_recognizer.engine
+        for frame_candidate in fallback_frames:
+            try:
+                results = detect_engine.detect_and_encode(frame_candidate)
+            except Exception:
+                results = []
+            if results:
+                return frame_candidate, results
+
+    return image, []
 
 
 def _resolve_effective_attendance_type(requested_attendance_type):
@@ -162,52 +449,6 @@ def _apply_attendance_action(
     current_time = datetime.now()
 
     if attendance_type == 'auto':
-        cooldown_text = _format_cooldown_text(cooldown_seconds)
-
-        if cooldown_seconds > 0:
-            latest_record = Attendance.query.filter_by(
-                user_id=user.id,
-                date=today_val,
-            ).filter(Attendance.check_in_time.isnot(None)).order_by(Attendance.check_in_time.desc()).first()
-
-            if latest_record and _is_within_cooldown(
-                current_time,
-                latest_record.check_in_time,
-                cooldown_seconds,
-            ):
-                remaining_seconds = _cooldown_remaining_seconds(
-                    current_time,
-                    latest_record.check_in_time,
-                    cooldown_seconds,
-                )
-                return {
-                    'ok': False,
-                    'status_code': 400,
-                    'message': f'Chỉ được ghi chấm công 1 lần mỗi {cooldown_text}',
-                    'cooldown_remaining_seconds': remaining_seconds,
-                }
-
-        if cooldown_seconds > 0:
-            recent_minutes = max(1, (cooldown_seconds + 59) // 60)
-            if erp_attendance.check_recent_attendance(user.employee_id, minutes=recent_minutes, auth=erp_auth):
-                latest_record_for_erp = Attendance.query.filter_by(
-                    user_id=user.id,
-                    date=today_val,
-                ).filter(Attendance.check_in_time.isnot(None)).order_by(Attendance.check_in_time.desc()).first()
-                remaining_seconds = cooldown_seconds
-                if latest_record_for_erp and latest_record_for_erp.check_in_time:
-                    remaining_seconds = _cooldown_remaining_seconds(
-                        current_time,
-                        latest_record_for_erp.check_in_time,
-                        cooldown_seconds,
-                    ) or cooldown_seconds
-                return {
-                    'ok': False,
-                    'status_code': 400,
-                    'message': f'Đã có ghi chấm công trong ERP gần {cooldown_text}',
-                    'cooldown_remaining_seconds': remaining_seconds,
-                }
-
         status = 'present'
         if current_time.hour > 8 or (current_time.hour == 8 and current_time.minute > 30):
             status = 'late'
@@ -499,9 +740,11 @@ def attendance_image():
         attendance_code = None
         request_location = None
         include_preview = False
+        tolerance = 0.58
         attendance_type = 'checkin'
         requested_attendance_type = 'checkin'
         attendance_cooldown_seconds = get_attendance_cooldown_seconds()
+        image_bytes = b''
         if 'image' in request.files:
             image_file = request.files['image']
             attendance_code = request.form.get('attendance_code')
@@ -509,6 +752,7 @@ def attendance_image():
             attendance_type = requested_attendance_type
             include_preview_raw = request.form.get('include_preview', 'false')
             include_preview = str(include_preview_raw).strip().lower() in {'1', 'true', 'yes', 'on'}
+            tolerance = _parse_tolerance(request.form.get('tolerance', tolerance), default=tolerance)
             request_location = parse_location_payload({
                 'latitude': request.form.get('latitude'),
                 'longitude': request.form.get('longitude'),
@@ -523,10 +767,15 @@ def attendance_image():
                         request_location = parse_location_payload({'location': json.loads(location_raw)})
                     except Exception:
                         request_location = None
+
+            image_bytes = image_file.read() or b''
+            if not image_bytes:
+                return jsonify({'success': False, 'message': 'Thiếu ảnh'}), 400
+
             with state.face_recognition_lock:
-                face_encoding, error = state.face_recognizer.encode_face_from_image(image_file)
+                face_encoding, error = state.face_recognizer.encode_face_from_image(io.BytesIO(image_bytes))
         else:
-            data = request.get_json()
+            data = request.get_json(silent=True) or {}
             if not data or 'image_base64' not in data:
                 return jsonify({'success': False, 'message': 'Thiếu ảnh'}), 400
             image_base64 = data['image_base64']
@@ -538,7 +787,15 @@ def attendance_image():
                 include_preview = include_preview_raw.strip().lower() in {'1', 'true', 'yes', 'on'}
             else:
                 include_preview = bool(include_preview_raw)
+            tolerance = _parse_tolerance(data.get('tolerance', tolerance), default=tolerance)
             request_location = parse_location_payload(data)
+
+            raw_base64 = image_base64.split(',', 1)[1] if ',' in image_base64 else image_base64
+            try:
+                image_bytes = base64.b64decode(raw_base64)
+            except Exception:
+                return jsonify({'success': False, 'message': 'Dữ liệu ảnh base64 không hợp lệ'}), 400
+
             with state.face_recognition_lock:
                 face_encoding, error = state.face_recognizer.encode_face_from_base64(image_base64)
 
@@ -547,9 +804,13 @@ def attendance_image():
         if error:
             return jsonify({'success': False, 'message': error}), 400
 
+        image = _decode_image_to_bgr(image_bytes)
+        if image is None or image.size == 0:
+            return jsonify({'success': False, 'message': 'Không đọc được dữ liệu ảnh'}), 400
+
         with state.face_recognition_lock:
             matches = state.face_recognizer.compare_faces(
-                state.face_recognizer.known_face_encodings, face_encoding, tolerance=0.5
+                state.face_recognizer.known_face_encodings, face_encoding, tolerance=tolerance
             )
             face_distances = state.face_recognizer.compute_distance(
                 state.face_recognizer.known_face_encodings, face_encoding
@@ -559,6 +820,8 @@ def attendance_image():
             return jsonify({'success': False, 'message': 'Không nhận diện được nhân viên'}), 404
 
         best_match_index = int(np.argmin(face_distances))
+        best_distance = float(face_distances[best_match_index])
+        similarity_percent = _distance_to_similarity_percent(best_distance) or 0
         if not matches[best_match_index]:
             return jsonify({'success': False, 'message': 'Không nhận diện được nhân viên'}), 404
 
@@ -567,27 +830,15 @@ def attendance_image():
         if not user:
             return jsonify({'success': False, 'message': 'Không tìm thấy nhân viên'}), 404
 
-        # Anti-spoofing check
-        if 'image' in request.files:
-            image_file = request.files['image']
-            image_file.stream.seek(0)
-            file_bytes = np.asarray(bytearray(image_file.read()), dtype=np.uint8)
-            image = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
-        else:
-            image_bytes = base64.b64decode(
-                image_base64.split(',')[1] if ',' in image_base64 else image_base64
-            )
-            pil_img = PILImage.open(io.BytesIO(image_bytes))
-            image = np.array(pil_img)
-
-        results = state.face_recognizer.engine.detect_and_encode(image)
-        if len(results) == 0:
+        detect_frame, detect_results = _detect_faces_with_fallback(image)
+        if len(detect_results) == 0:
             return jsonify({'success': False, 'message': 'Không tìm thấy khuôn mặt'}), 400
 
-        res = results[0]
-        bbox = res['bbox']
+        bbox = detect_results[0].get('bbox')
+        if bbox is None or len(bbox) < 4:
+            return jsonify({'success': False, 'message': 'Không xác định được vùng khuôn mặt'}), 400
 
-        height, width = image.shape[:2]
+        height, width = detect_frame.shape[:2]
         x1 = max(0, min(width - 1, int(bbox[0])))
         y1 = max(0, min(height - 1, int(bbox[1])))
         x2 = max(x1 + 1, min(width, int(bbox[2])))
@@ -596,43 +847,27 @@ def attendance_image():
 
         preview_image_base64 = None
         if include_preview:
-            try:
-                preview_frame = image.copy()
-                if len(preview_frame.shape) == 2:
-                    preview_frame = cv2.cvtColor(preview_frame, cv2.COLOR_GRAY2BGR)
-                elif len(preview_frame.shape) == 3 and preview_frame.shape[2] == 4:
-                    preview_frame = cv2.cvtColor(preview_frame, cv2.COLOR_RGBA2BGR)
-
-                cv2.rectangle(preview_frame, (x1, y1), (x2, y2), (0, 220, 255), 2)
-                cv2.putText(
-                    preview_frame,
-                    user.name,
-                    (x1, max(26, y1 - 10)),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.7,
-                    (0, 220, 255),
-                    2,
-                    cv2.LINE_AA,
-                )
-
-                ok, encoded = cv2.imencode('.jpg', preview_frame, [int(cv2.IMWRITE_JPEG_QUALITY), 82])
-                if ok:
-                    preview_image_base64 = (
-                        'data:image/jpeg;base64,'
-                        + base64.b64encode(encoded.tobytes()).decode('utf-8')
-                    )
-            except Exception as preview_exc:
-                print(f"attendance_image preview generation error: {preview_exc}")
+            preview_image_base64 = _build_preview_image_base64(
+                detect_frame,
+                bbox=[x1, y1, x2, y2],
+                label=user.name,
+            )
+            if preview_image_base64 is None:
+                preview_image_base64 = _build_preview_image_base64(image)
 
         bbox_xywh = [bbox[0], bbox[1], bbox[2] - bbox[0], bbox[3] - bbox[1]]
-        is_real, spoof_score = state.face_recognizer.engine.check_anti_spoofing(image, bbox_xywh)
+        is_real, spoof_score = state.face_recognizer.engine.check_anti_spoofing(
+            detect_frame,
+            bbox_xywh,
+        )
         if not is_real:
             return jsonify({
                 'success': False,
                 'message': 'Phát hiện khuôn mặt giả mạo!',
                 'user': _serialize_attendance_user(user),
                 'detection_bbox': detection_bbox,
-                'face_count': len(results),
+                'face_count': len(detect_results),
+                'similarity_percent': similarity_percent,
                 'preview_image_base64': preview_image_base64,
             }), 400
 
@@ -651,7 +886,8 @@ def attendance_image():
                 'cooldown_remaining_seconds': int(action_result.get('cooldown_remaining_seconds') or 0),
                 'user': _serialize_attendance_user(user),
                 'detection_bbox': detection_bbox,
-                'face_count': len(results),
+                'face_count': len(detect_results),
+                'similarity_percent': similarity_percent,
                 'preview_image_base64': preview_image_base64,
             }), int(action_result.get('status_code') or 400)
 
@@ -674,7 +910,8 @@ def attendance_image():
             'check_in_location_text': ((location_bundle or {}).get('checkin') or {}).get('text', ''),
             'check_out_location_text': ((location_bundle or {}).get('checkout') or {}).get('text', ''),
             'detection_bbox': detection_bbox,
-            'face_count': len(results),
+            'face_count': len(detect_results),
+            'similarity_percent': similarity_percent,
             'preview_image_base64': preview_image_base64,
         })
     except Exception as e:
@@ -682,13 +919,20 @@ def attendance_image():
 
 
 @attendance_bp.route('/api/employee/attendance_image', methods=['POST'])
-@employee_required
 def employee_attendance_image():
     try:
+        auth_context, auth_error = _resolve_employee_image_attendance_context()
+        if auth_error:
+            return auth_error
+
+        is_admin_attendance = auth_context.get('mode') == 'admin'
+        employee_user = auth_context.get('employee_user')
         attendance_code = None
         request_location = None
         attendance_type = 'checkin'
         requested_attendance_type = 'checkin'
+        include_preview = True
+        tolerance = 0.58
         attendance_cooldown_seconds = get_attendance_cooldown_seconds()
 
         image_bytes = b''
@@ -697,6 +941,9 @@ def employee_attendance_image():
             attendance_code = request.form.get('attendance_code')
             requested_attendance_type = _normalize_attendance_type(request.form.get('attendance_type'))
             attendance_type = requested_attendance_type
+            include_preview_raw = request.form.get('include_preview', 'true')
+            include_preview = str(include_preview_raw).strip().lower() in {'1', 'true', 'yes', 'on'}
+            tolerance = _parse_tolerance(request.form.get('tolerance', tolerance), default=tolerance)
             request_location = parse_location_payload({
                 'latitude': request.form.get('latitude'),
                 'longitude': request.form.get('longitude'),
@@ -720,6 +967,12 @@ def employee_attendance_image():
             attendance_code = data.get('attendance_code')
             requested_attendance_type = _normalize_attendance_type(data.get('attendance_type'))
             attendance_type = requested_attendance_type
+            include_preview_raw = data.get('include_preview', True)
+            if isinstance(include_preview_raw, str):
+                include_preview = include_preview_raw.strip().lower() in {'1', 'true', 'yes', 'on'}
+            else:
+                include_preview = bool(include_preview_raw)
+            tolerance = _parse_tolerance(data.get('tolerance', tolerance), default=tolerance)
             request_location = parse_location_payload(data)
 
             raw_base64 = image_base64.split(',', 1)[1] if ',' in image_base64 else image_base64
@@ -740,7 +993,7 @@ def employee_attendance_image():
             matches = state.face_recognizer.compare_faces(
                 state.face_recognizer.known_face_encodings,
                 face_encoding,
-                tolerance=0.5,
+                tolerance=tolerance,
             )
             face_distances = state.face_recognizer.compute_distance(
                 state.face_recognizer.known_face_encodings,
@@ -775,29 +1028,50 @@ def employee_attendance_image():
         if not matched_user:
             return jsonify({'success': False, 'message': 'Không tìm thấy nhân viên'}), 404
 
-        employee_user = getattr(g, 'employee_user', None)
-        if employee_user is None:
-            return jsonify({'success': False, 'message': 'Phiên đăng nhập không hợp lệ'}), 401
+        image = _decode_image_to_bgr(image_bytes)
+        if image is None or image.size == 0:
+            return jsonify({'success': False, 'message': 'Không đọc được dữ liệu ảnh'}), 400
 
-        image = cv2.imdecode(np.frombuffer(image_bytes, dtype=np.uint8), cv2.IMREAD_COLOR)
-        if image is None:
-            pil_img = PILImage.open(io.BytesIO(image_bytes))
-            if pil_img.mode != 'RGB':
-                pil_img = pil_img.convert('RGB')
-            image = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
+        detect_frame, detect_results = _detect_faces_with_fallback(image)
 
-        with state.face_recognition_lock:
-            detect_results = state.face_recognizer.engine.detect_and_encode(image)
+        preview_image_base64 = None
+        if include_preview:
+            first_bbox = detect_results[0].get('bbox') if detect_results else None
+            preview_image_base64 = _build_preview_image_base64(
+                detect_frame,
+                bbox=first_bbox,
+                label=matched_user.name,
+            )
+            if preview_image_base64 is None:
+                preview_image_base64 = _build_preview_image_base64(image)
 
         if len(detect_results) == 0:
-            return jsonify({'success': False, 'message': 'Không tìm thấy khuôn mặt'}), 400
+            return jsonify({
+                'success': False,
+                'message': 'Không tìm thấy khuôn mặt. Vui lòng đưa mặt gần hơn và đủ sáng.',
+                'similarity_percent': similarity_percent,
+                'mismatch': False,
+                'attendance_mode': attendance_mode,
+                'requested_attendance_type': requested_attendance_type,
+                'attendance_type': attendance_type,
+                'preview_image_base64': preview_image_base64,
+            }), 400
 
         bbox = detect_results[0].get('bbox')
         if bbox is None or len(bbox) < 4:
-            return jsonify({'success': False, 'message': 'Không xác định được vùng khuôn mặt'}), 400
+            return jsonify({
+                'success': False,
+                'message': 'Không xác định được vùng khuôn mặt',
+                'similarity_percent': similarity_percent,
+                'mismatch': False,
+                'attendance_mode': attendance_mode,
+                'requested_attendance_type': requested_attendance_type,
+                'attendance_type': attendance_type,
+                'preview_image_base64': preview_image_base64,
+            }), 400
 
         bbox_xywh = [bbox[0], bbox[1], bbox[2] - bbox[0], bbox[3] - bbox[1]]
-        is_real, spoof_score = state.face_recognizer.engine.check_anti_spoofing(image, bbox_xywh)
+        is_real, spoof_score = state.face_recognizer.engine.check_anti_spoofing(detect_frame, bbox_xywh)
         if not is_real:
             return jsonify({
                 'success': False,
@@ -808,9 +1082,10 @@ def employee_attendance_image():
                 'attendance_mode': attendance_mode,
                 'requested_attendance_type': requested_attendance_type,
                 'attendance_type': attendance_type,
+                'preview_image_base64': preview_image_base64,
             }), 400
 
-        if matched_user.id != employee_user.id:
+        if employee_user is not None and matched_user.id != employee_user.id:
             return jsonify({
                 'success': False,
                 'message': (
@@ -824,14 +1099,16 @@ def employee_attendance_image():
                 'attendance_mode': attendance_mode,
                 'requested_attendance_type': requested_attendance_type,
                 'attendance_type': attendance_type,
+                'preview_image_base64': preview_image_base64,
             }), 409
 
+        attendance_user = employee_user or matched_user
         action_result = _apply_attendance_action(
-            user=employee_user,
+            user=attendance_user,
             attendance_type=attendance_type,
             request_location=request_location,
             attendance_code=attendance_code,
-            erp_auth=None,
+            erp_auth=auth_context.get('erp_auth') if is_admin_attendance else None,
             cooldown_seconds=attendance_cooldown_seconds,
         )
         if not action_result.get('ok'):
@@ -841,10 +1118,11 @@ def employee_attendance_image():
                 'cooldown_remaining_seconds': int(action_result.get('cooldown_remaining_seconds') or 0),
                 'similarity_percent': similarity_percent,
                 'mismatch': False,
-                'user': _serialize_attendance_user(employee_user),
+                'user': _serialize_attendance_user(attendance_user),
                 'attendance_mode': attendance_mode,
                 'requested_attendance_type': requested_attendance_type,
                 'attendance_type': attendance_type,
+                'preview_image_base64': preview_image_base64,
             }), int(action_result.get('status_code') or 400)
 
         attendance_row = action_result.get('attendance')
@@ -852,8 +1130,8 @@ def employee_attendance_image():
 
         return jsonify({
             'success': True,
-            'message': action_result.get('message') or f'Điểm danh thành công cho {employee_user.name}',
-            'user': _serialize_attendance_user(employee_user),
+            'message': action_result.get('message') or f'Điểm danh thành công cho {attendance_user.name}',
+            'user': _serialize_attendance_user(attendance_user),
             'status': attendance_row.status if attendance_row else '',
             'attendance_mode': attendance_mode,
             'requested_attendance_type': requested_attendance_type,
@@ -867,15 +1145,175 @@ def employee_attendance_image():
             'check_out_location_text': ((location_bundle or {}).get('checkout') or {}).get('text', ''),
             'similarity_percent': similarity_percent,
             'mismatch': False,
+            'preview_image_base64': preview_image_base64,
         })
     except Exception as exc:
         return jsonify({'success': False, 'message': str(exc)}), 500
 
 
+def _employee_attendance_detect_impl():
+    tolerance = 0.58
+    image_bytes = b''
+    if 'image' in request.files:
+        image_file = request.files['image']
+        image_bytes = image_file.read() or b''
+        if not image_bytes:
+            return jsonify({'success': False, 'message': 'Thiếu ảnh'}), 400
+        tolerance = _parse_tolerance(request.form.get('tolerance', tolerance), default=tolerance)
+    else:
+        data = request.get_json(silent=True) or {}
+        image_base64 = data.get('image_base64')
+        if not image_base64:
+            return jsonify({'success': False, 'message': 'Thiếu ảnh'}), 400
+
+        raw_base64 = image_base64.split(',', 1)[1] if ',' in image_base64 else image_base64
+        try:
+            image_bytes = base64.b64decode(raw_base64)
+        except Exception:
+            return jsonify({'success': False, 'message': 'Dữ liệu ảnh base64 không hợp lệ'}), 400
+        tolerance = _parse_tolerance(data.get('tolerance', tolerance), default=tolerance)
+
+    image = _decode_image_to_bgr(image_bytes)
+    if image is None or image.size == 0:
+        return jsonify({'success': False, 'message': 'Không đọc được dữ liệu ảnh'}), 400
+
+    detect_frame, detect_results = _detect_faces_with_fallback(image)
+    frame_height, frame_width = detect_frame.shape[:2]
+    brightness_score = _compute_brightness_score(detect_frame)
+
+    sorted_results = sorted(
+        detect_results,
+        key=lambda item: (
+            (item.get('bbox', [0, 0, 0, 0])[2] - item.get('bbox', [0, 0, 0, 0])[0])
+            * (item.get('bbox', [0, 0, 0, 0])[3] - item.get('bbox', [0, 0, 0, 0])[1])
+        ),
+        reverse=True,
+    )
+    primary_result = sorted_results[0] if sorted_results else None
+    raw_bbox = primary_result.get('bbox') if primary_result else None
+    detection_bbox = _normalize_bbox(raw_bbox, frame_width, frame_height)
+    face_size_ratio = _compute_face_size_ratio(detection_bbox, frame_width, frame_height)
+    guidance = _build_face_guidance(
+        detection_bbox,
+        frame_width,
+        frame_height,
+        brightness_score,
+        len(detect_results),
+    )
+
+    expected_user = _serialize_attendance_user(getattr(g, 'employee_user', None))
+    if not primary_result or detection_bbox is None:
+        return jsonify({
+            'success': True,
+            'detected': False,
+            'detected_count': len(detect_results),
+            'matched': False,
+            'mismatch': False,
+            'similarity_percent': 0,
+            'expected_user': expected_user,
+            'detected_user': None,
+            'frame_width': frame_width,
+            'frame_height': frame_height,
+            'detection_bbox': None,
+            'face_size_ratio': face_size_ratio,
+            'brightness_score': brightness_score,
+            'guidance': guidance,
+        })
+
+    embedding = primary_result.get('embedding')
+    if embedding is None:
+        return jsonify({
+            'success': True,
+            'detected': True,
+            'detected_count': len(detect_results),
+            'matched': False,
+            'mismatch': False,
+            'similarity_percent': 0,
+            'expected_user': expected_user,
+            'detected_user': None,
+            'frame_width': frame_width,
+            'frame_height': frame_height,
+            'detection_bbox': detection_bbox,
+            'face_size_ratio': face_size_ratio,
+            'brightness_score': brightness_score,
+            'guidance': guidance,
+        })
+
+    with state.face_recognition_lock:
+        raw_known_encodings = state.face_recognizer.known_face_encodings
+        known_encodings = list(raw_known_encodings) if raw_known_encodings is not None else []
+        raw_known_ids = state.face_recognizer.known_face_ids
+        known_ids = list(raw_known_ids) if raw_known_ids is not None else []
+
+        matches = state.face_recognizer.compare_faces(
+            known_encodings,
+            embedding,
+            tolerance=tolerance,
+        ) if known_encodings else []
+        distances = state.face_recognizer.compute_distance(
+            known_encodings,
+            embedding,
+        ) if known_encodings else []
+
+    if len(distances) == 0:
+        return jsonify({
+            'success': True,
+            'detected': True,
+            'detected_count': len(detect_results),
+            'matched': False,
+            'mismatch': False,
+            'similarity_percent': 0,
+            'expected_user': expected_user,
+            'detected_user': None,
+            'frame_width': frame_width,
+            'frame_height': frame_height,
+            'detection_bbox': detection_bbox,
+            'face_size_ratio': face_size_ratio,
+            'brightness_score': brightness_score,
+            'guidance': guidance,
+        })
+
+    best_idx = int(np.argmin(distances))
+    similarity_percent = _distance_to_similarity_percent(float(distances[best_idx])) or 0
+    matched_value = matches[best_idx] if best_idx < len(matches) else False
+    if isinstance(matched_value, np.ndarray):
+        matched = bool(np.all(matched_value))
+    else:
+        matched = bool(matched_value)
+
+    detected_user = None
+    mismatch = False
+    if matched:
+        detected_user_id = known_ids[best_idx] if best_idx < len(known_ids) else None
+        detected_user = User.query.get(detected_user_id) if detected_user_id else None
+        employee_user = getattr(g, 'employee_user', None)
+        mismatch = bool(detected_user and employee_user and detected_user.id != employee_user.id)
+
+    return jsonify({
+        'success': True,
+        'detected': True,
+        'detected_count': len(detect_results),
+        'matched': matched,
+        'mismatch': mismatch,
+        'similarity_percent': similarity_percent,
+        'expected_user': expected_user,
+        'detected_user': _serialize_attendance_user(detected_user) if detected_user else None,
+        'frame_width': frame_width,
+        'frame_height': frame_height,
+        'detection_bbox': detection_bbox,
+        'face_size_ratio': face_size_ratio,
+        'brightness_score': brightness_score,
+        'guidance': guidance,
+    })
+
+
 @attendance_bp.route('/api/employee/attendance_detect', methods=['POST'])
-@employee_required
 def employee_attendance_detect():
     try:
+        _, auth_error = _resolve_employee_image_attendance_context()
+        if auth_error:
+            return auth_error
+        return _employee_attendance_detect_impl()
         data = request.get_json(silent=True) or {}
         image_base64 = data.get('image_base64')
         if not image_base64:
@@ -1064,10 +1502,164 @@ def employee_attendance_settings():
     })
 
 
+def _attendance_detect_impl():
+    image_bytes = b''
+    max_faces_raw = 3
+    recognize_raw = False
+    tolerance_raw = 0.5
+
+    if 'image' in request.files:
+        image_file = request.files['image']
+        image_bytes = image_file.read() or b''
+        if not image_bytes:
+            return jsonify({'success': False, 'message': 'Thieu anh', 'detections': []}), 400
+        max_faces_raw = request.form.get('max_faces', 3)
+        recognize_raw = request.form.get('recognize', False)
+        tolerance_raw = request.form.get('tolerance', 0.5)
+    else:
+        data = request.get_json(silent=True) or {}
+        image_base64 = data.get('image_base64')
+        if not image_base64:
+            return jsonify({'success': False, 'message': 'Thieu anh', 'detections': []}), 400
+
+        raw_base64 = image_base64.split(',', 1)[1] if ',' in image_base64 else image_base64
+        try:
+            image_bytes = base64.b64decode(raw_base64)
+        except Exception:
+            return jsonify({
+                'success': False,
+                'message': 'Du lieu anh base64 khong hop le',
+                'detections': [],
+            }), 400
+
+        max_faces_raw = data.get('max_faces', 3)
+        recognize_raw = data.get('recognize', False)
+        tolerance_raw = data.get('tolerance', 0.5)
+
+    image = _decode_image_to_bgr(image_bytes)
+    if image is None or image.size == 0:
+        return jsonify({
+            'success': False,
+            'message': 'Khong doc duoc du lieu anh',
+            'detections': [],
+        }), 400
+
+    try:
+        max_faces = int(max_faces_raw)
+    except Exception:
+        max_faces = 3
+    max_faces = max(1, min(max_faces, 10))
+
+    if isinstance(recognize_raw, str):
+        recognize = recognize_raw.strip().lower() in {'1', 'true', 'yes', 'on'}
+    else:
+        recognize = bool(recognize_raw)
+
+    try:
+        tolerance = float(tolerance_raw)
+    except Exception:
+        tolerance = 0.5
+    tolerance = max(0.2, min(tolerance, 0.8))
+
+    detect_frame, results = _detect_faces_with_fallback(image)
+    frame_height, frame_width = detect_frame.shape[:2]
+    brightness_score = _compute_brightness_score(detect_frame)
+
+    with state.face_recognition_lock:
+        raw_known_encodings = state.face_recognizer.known_face_encodings
+        known_encodings = list(raw_known_encodings) if raw_known_encodings is not None else []
+        raw_known_names = state.face_recognizer.known_face_names
+        known_names = list(raw_known_names) if raw_known_names is not None else []
+        raw_known_ids = state.face_recognizer.known_face_ids
+        known_ids = list(raw_known_ids) if raw_known_ids is not None else []
+
+    sorted_results = sorted(
+        results,
+        key=lambda item: (
+            (item.get('bbox', [0, 0, 0, 0])[2] - item.get('bbox', [0, 0, 0, 0])[0])
+            * (item.get('bbox', [0, 0, 0, 0])[3] - item.get('bbox', [0, 0, 0, 0])[1])
+        ),
+        reverse=True,
+    )[:max_faces]
+
+    detections = []
+    for idx, res in enumerate(sorted_results):
+        detection_bbox = _normalize_bbox(res.get('bbox'), frame_width, frame_height)
+        if detection_bbox is None:
+            continue
+
+        detection_item = {
+            'track_id': idx,
+            'bbox': detection_bbox,
+            'name': 'Unknown',
+            'user_id': None,
+            'matched': False,
+            'distance': None,
+            'similarity_percent': 0,
+        }
+
+        embedding = res.get('embedding')
+        if recognize and embedding is not None and known_encodings:
+            matches = state.face_recognizer.compare_faces(
+                known_encodings,
+                embedding,
+                tolerance=tolerance,
+            )
+            distances = state.face_recognizer.compute_distance(known_encodings, embedding)
+
+            if len(distances) > 0:
+                best_idx = int(np.argmin(distances))
+                distance = float(distances[best_idx])
+                detection_item['distance'] = distance
+                detection_item['similarity_percent'] = _distance_to_similarity_percent(distance) or 0
+                matched_value = matches[best_idx] if best_idx < len(matches) else False
+                if isinstance(matched_value, np.ndarray):
+                    matched_value = bool(np.all(matched_value))
+                else:
+                    matched_value = bool(matched_value)
+
+                if matched_value:
+                    detection_item['matched'] = True
+                    detection_item['name'] = (
+                        known_names[best_idx] if best_idx < len(known_names) else 'Known'
+                    )
+                    detection_item['user_id'] = known_ids[best_idx] if best_idx < len(known_ids) else None
+
+        detections.append(detection_item)
+
+    primary_detection = detections[0] if detections else None
+    primary_bbox = primary_detection.get('bbox') if primary_detection else None
+    face_size_ratio = _compute_face_size_ratio(primary_bbox, frame_width, frame_height)
+    guidance = _build_face_guidance(
+        primary_bbox,
+        frame_width,
+        frame_height,
+        brightness_score,
+        len(detections),
+    )
+
+    return jsonify({
+        'success': True,
+        'message': 'OK',
+        'frame_width': frame_width,
+        'frame_height': frame_height,
+        'detected_count': len(detections),
+        'recognition_enabled': recognize,
+        'detections': detections,
+        'detection_bbox': primary_bbox,
+        'face_size_ratio': face_size_ratio,
+        'brightness_score': brightness_score,
+        'guidance': guidance,
+        'matched': bool(primary_detection and primary_detection.get('matched')),
+        'similarity_percent': float(primary_detection.get('similarity_percent') or 0) if primary_detection else 0,
+    })
+
+
 @attendance_bp.route('/api/attendance_detect', methods=['POST'])
 @admin_required
 def attendance_detect():
     try:
+        return _attendance_detect_impl()
         data = request.get_json(silent=True) or {}
         image_base64 = data.get('image_base64')
         if not image_base64:

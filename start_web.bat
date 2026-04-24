@@ -86,7 +86,7 @@ timeout /t 3 >nul
 start "FaceCheck Frontend" cmd /k "npm run dev:react%FRONTEND_HOST_ARG%"
 
 if "%PUBLIC_MODE%"=="1" (
-    for /f "usebackq delims=" %%I in (`powershell -NoProfile -Command "Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.IPAddress -notlike '169.254*' -and $_.IPAddress -ne '127.0.0.1' } | Select-Object -ExpandProperty IPAddress -First 1"`) do set "LAN_IP=%%I"
+    for /f "usebackq delims=" %%I in (`powershell -NoProfile -Command "$ip=(Get-NetIPConfiguration | Where-Object { $_.IPv4DefaultGateway -ne $null -and $_.IPv4Address.IPAddress -notlike '169.254*' -and $_.IPv4Address.IPAddress -ne '127.0.0.1' } | Select-Object -ExpandProperty IPv4Address | Select-Object -ExpandProperty IPAddress -First 1); if(-not $ip){$ip=(Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.IPAddress -notlike '169.254*' -and $_.IPAddress -ne '127.0.0.1' } | Select-Object -ExpandProperty IPAddress -First 1)}; if($ip){$ip}"`) do set "LAN_IP=%%I"
     if defined LAN_IP (
         call set "FRONTEND_URL=http://%%LAN_IP%%:5173"
         call set "BACKEND_URL=http://%%LAN_IP%%:5000"
