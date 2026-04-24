@@ -15,10 +15,10 @@ function isBrowserCameraType(cameraType) {
 
 const FIXED_BROWSER_CAMERA_ID = 'fixed-browser-camera'
 const BROWSER_DEVICE_STORAGE_PREFIX = 'attendance-browser-device:'
-const LIVE_DETECT_INTERVAL_MS = 900
+const LIVE_DETECT_INTERVAL_MS = 450
 const LIVE_DETECT_MAX_WIDTH = 480
 const AUTO_ATTENDANCE_FALLBACK_COOLDOWN_MS = 3000
-const AUTO_ATTENDANCE_STREAK_REQUIRED = 2
+const AUTO_ATTENDANCE_STREAK_REQUIRED = 1
 const GPS_REFRESH_INTERVAL_MS = 30000
 const GEOLOCATION_SAMPLE_TIMEOUT_MS = 12000
 const GEOLOCATION_TARGET_ACCURACY_METERS = 35
@@ -633,6 +633,7 @@ export default function Attendance() {
   const autoAttendanceInFlightRef = useRef(false)
   const autoAttendanceStreakRef = useRef({ userId: null, count: 0 })
   const autoAttendanceCooldownRef = useRef({})
+  const processedFaceLockRef = useRef(null)
   const browserStreamRef = useRef(null)
 
   const selectedCamera = useMemo(
@@ -827,6 +828,7 @@ export default function Attendance() {
   useEffect(() => {
     autoAttendanceStreakRef.current = { userId: null, count: 0 }
     autoAttendanceCooldownRef.current = {}
+    processedFaceLockRef.current = null
   }, [attendanceMode, selectedAttendanceType, autoAttendanceCooldownMs])
 
   useEffect(() => {
@@ -843,6 +845,7 @@ export default function Attendance() {
       setLiveDetectionError('')
       autoAttendanceStreakRef.current = { userId: null, count: 0 }
       autoAttendanceInFlightRef.current = false
+      processedFaceLockRef.current = null
       return undefined
     }
 
@@ -880,6 +883,12 @@ export default function Attendance() {
           })
           setLiveDetectionError('')
           autoAttendanceStreakRef.current = { userId: null, count: 0 }
+          processedFaceLockRef.current = null
+          return
+        }
+
+        if (processedFaceLockRef.current?.userId) {
+          setLiveDetectionError('Đã xử lý khuôn mặt này. Mời nhân viên rời khung để quét người tiếp theo.')
           return
         }
 
@@ -931,10 +940,14 @@ export default function Attendance() {
                 autoAttendanceInFlightRef.current = true
 
                 try {
-                  await captureBrowserAttendance(activeAttendanceType, {
+                  const captureResult = await captureBrowserAttendance(activeAttendanceType, {
                     autoTriggered: true,
                     detectedUserId: candidateUserId,
                   })
+                  if (captureResult?.success || captureResult?.cooldown) {
+                    processedFaceLockRef.current = { userId: candidateUserId }
+                    autoAttendanceStreakRef.current = { userId: null, count: 0 }
+                  }
                 } finally {
                   autoAttendanceInFlightRef.current = false
                 }
@@ -967,6 +980,7 @@ export default function Attendance() {
       detectInFlightRef.current = false
       autoAttendanceInFlightRef.current = false
       autoAttendanceStreakRef.current = { userId: null, count: 0 }
+      processedFaceLockRef.current = null
     }
   }, [
     attendanceBusy,
@@ -1259,18 +1273,18 @@ export default function Attendance() {
 
     if (!cameraRunning || cameraRuntimeMode !== 'browser') {
       window.alert('Hãy bật camera trình duyệt trước khi điểm danh.')
-      return
+      return { success: false }
     }
 
     if (!videoRef.current || !canvasRef.current) {
       window.alert('Camera chưa sẵn sàng để chụp.')
-      return
+      return { success: false }
     }
 
     const video = videoRef.current
     if (!video.videoWidth || !video.videoHeight) {
       window.alert('Luồng camera chưa sẵn sàng, vui lòng thử lại.')
-      return
+      return { success: false }
     }
 
     const canvas = canvasRef.current
@@ -1342,6 +1356,7 @@ export default function Attendance() {
           detail: cleanLocationDisplayText(res.location_text),
         })
         await loadTodayRecords()
+        return { success: true, response: res }
       } else {
         const failureMessage = res.message || `Không thể ${actionLabel} bằng camera trình duyệt`
         const lowerFailureMessage = failureMessage.toLowerCase()
@@ -1378,6 +1393,7 @@ export default function Attendance() {
             ? `Thời gian cho lần quét tiếp theo: ${formatCountdownClock(cooldownRemainingSeconds > 0 ? cooldownRemainingSeconds : Math.max(1, Math.ceil(attendanceCooldownSeconds || 0)))}`
             : '',
         })
+        return { success: false, cooldown: isCooldownMessage, response: res }
       }
     } catch (error) {
       setAttendanceFeedback({
@@ -1385,6 +1401,7 @@ export default function Attendance() {
         message: error?.message || 'Không thể gửi ảnh điểm danh',
         detail: '',
       })
+      return { success: false, error }
     } finally {
       setAttendanceBusy(false)
     }

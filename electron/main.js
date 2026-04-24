@@ -8,6 +8,9 @@ let mainWindow = null;
 let pythonProcess = null;
 const PYTHON_PORT = 5000;
 const isDev = !app.isPackaged;
+const backendEnvProfile = String(
+  process.env.ERP_ENV_PROFILE || (isDev ? 'DEV' : 'PROD'),
+).trim().toUpperCase();
 
 function findFreePort(startPort) {
   return new Promise((resolve, reject) => {
@@ -88,10 +91,13 @@ function startPythonBackend(port) {
 
     console.log(`Starting Python backend: ${pythonExe}`);
     console.log(`Using backend data dir: ${backendDataDir}`);
+    console.log(`Using ERP env profile: ${backendEnvProfile}`);
     pythonProcess = spawn(pythonExe, args, {
       cwd,
       env: {
         ...process.env,
+        ERP_ENV_PROFILE: backendEnvProfile,
+        FLASK_ENV: backendEnvProfile === 'PROD' ? 'production' : 'development',
         FLASK_PORT: String(port),
         FACECHECK_DATA_DIR: backendDataDir,
       },

@@ -5,6 +5,7 @@ setlocal
 set "PUBLIC_MODE=0"
 set "NGROK_MODE=0"
 set "CLOUD_MODE=0"
+set "ERP_PROFILE=DEV"
 
 REM ---- Read input arguments ----
 :parse_args
@@ -13,11 +14,21 @@ if /I "%~1"=="--public" set "PUBLIC_MODE=1"
 if /I "%~1"=="--ngrok" set "NGROK_MODE=1"
 if /I "%~1"=="--cloud" set "CLOUD_MODE=1"
 if /I "%~1"=="--cloudflare" set "CLOUD_MODE=1"
+if /I "%~1"=="--dev" set "ERP_PROFILE=DEV"
+if /I "%~1"=="--prod" set "ERP_PROFILE=PROD"
+if /I "%~1"=="dev" set "ERP_PROFILE=DEV"
+if /I "%~1"=="prod" set "ERP_PROFILE=PROD"
 shift
 goto parse_args
 :end_args
 
 if "%CLOUD_MODE%"=="1" set "NGROK_MODE=0"
+set "ERP_ENV_PROFILE=%ERP_PROFILE%"
+if /I "%ERP_PROFILE%"=="PROD" (
+    set "FLASK_ENV=production"
+) else (
+    set "FLASK_ENV=development"
+)
 
 set "SCRIPT_DIR=%~dp0"
 set "NGROK_BIN="
@@ -42,6 +53,7 @@ echo ============================================
 echo   FaceCheck - Website Mode
 echo ============================================
 echo.
+echo   ERP profile: %ERP_ENV_PROFILE%
 
 if "%CLOUD_MODE%"=="1" (
     echo   Mode: CLOUDFLARE ^(Internet access enabled^)

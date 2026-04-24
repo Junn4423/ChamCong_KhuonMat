@@ -8,9 +8,12 @@
     "dev:electron": "electron .",
     "dev": "concurrently \"npm run dev:react\" \"wait-on http://localhost:5173 && npm run dev:electron\"",
     "build:react": "vite build",
-    "build:python": "pyinstaller backend.spec --noconfirm --clean",
-    "build:electron": "npm run build:react && electron-builder",
-    "build": "npm run build:react && npm run build:python && npm run build:electron",
+    "build:react:dev": "vite build --mode development",
+    "build:react:prod": "vite build --mode production",
+    "build:python": "python -m PyInstaller --name facecheck-api --onedir --distpath python-dist --workpath build/pyinstaller --noconfirm --clean run_backend.py",
+    "pack:electron": "electron-builder",
+    "build:electron": "npm run build:react && npm run build:python && npm run pack:electron",
+    "build": "npm run build:electron",
     "preview": "vite preview"
   },
   "dependencies": {
